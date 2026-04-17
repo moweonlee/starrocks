@@ -178,10 +178,10 @@ public class PropertyAnalyzer {
     public static final String PROPERTIES_FLAT_JSON_COLUMN_MAX = "flat_json.column.max";
 
     // Comma-separated list of JSON paths that must always be flattened,
-    // regardless of sparsity (e.g. "page_stms_1,area_id" or "$.page_stms_1,$.area_id").
+    // regardless of sparsity (e.g. "event_ts,event_id" or "$.event_ts,$.event_id").
     public static final String PROPERTIES_FLAT_JSON_COLUMN_PATHS = "flat_json.column_paths";
 
-    // Upper bound on the number of force-path columns (independent of flat_json.column.max).
+    // Upper bound on the number of user-specified columns (independent of flat_json.column.max).
     public static final String PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX = "flat_json.column_paths.max";
 
     // Incremental add/remove operations for column_paths (ALTER TABLE SET only).
@@ -624,15 +624,6 @@ public class PropertyAnalyzer {
         return flatJsonEnabled;
     }
 
-    /**
-     * Parse and validate the {@code flat_json.column_paths} table property.
-     *
-     * <p>Each entry is trimmed and a leading {@code $.} prefix is stripped so that
-     * users may supply either {@code "page_stms_1"} or {@code "$.page_stms_1"}.
-     * An empty string after trimming is silently ignored.
-     *
-     * @return an immutable, order-preserving list of normalised path strings
-     */
     public static java.util.List<String> analyzeFlatJsonColumnPaths(Map<String, String> properties) {
         if (properties == null || !properties.containsKey(PROPERTIES_FLAT_JSON_COLUMN_PATHS)) {
             return java.util.Collections.emptyList();
@@ -654,11 +645,6 @@ public class PropertyAnalyzer {
         return java.util.Collections.unmodifiableList(result);
     }
 
-    /**
-     * Parse and validate the {@code flat_json.column_paths.max} table property.
-     *
-     * @return the configured maximum, or {@code -1} if the property is absent
-     */
     public static int analyzeFlatJsonColumnPathsMax(Map<String, String> properties) {
         if (properties == null || !properties.containsKey(PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX)) {
             return -1;
