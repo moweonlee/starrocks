@@ -15,6 +15,7 @@
 #include "util/json_flattener.h"
 
 #include <glog/logging.h>
+#include "storage/flat_json_config.h"
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 #include <velocypack/vpack.h>
@@ -645,5 +646,134 @@ INSTANTIATE_TEST_SUITE_P(JsonBoolExtractionCases, JsonBoolExtractionTest,
                                            std::make_tuple(R"({"bool_field": "false"})", false),
                                            std::make_tuple(R"({"bool_field": "1"})", true),
                                            std::make_tuple(R"({"bool_field": "0"})", false)));
+
+// column_paths (force-flatten) tests
+class JsonPathDeriverForcePathTest : public testing::Test {
+public:
+    void SetUp() override {
+        config::enable_json_flat_complex_type = true;
+        config::json_flat_sparsity_factor = 0.9;
+    }
+    void TearDown() override {
+        config::enable_json_flat_complex_type = false;
+        config::json_flat_sparsity_factor = 0.3;
+    }
+
+    JsonPathDeriver derive(const std::vector<std::string>& jsons, const FlatJsonConfig& cfg) {
+        auto col = JsonColumn::create();
+        for (const auto& s : jsons) {
+            ASSIGN_OR_ABORT(auto v, JsonValue::parse(s));
+            col->append(&v);
+        }
+        std::vector<const Column*> columns{col.get()};
+        JsonPathDeriver jf;
+        jf.init_flat_json_config(&cfg);
+        jf.derived(columns);
+        return jf;
+    }
+};
+
+// FORCE depth 1: sparse k2 (1/3) forced → column
+TEST_F(JsonPathDeriverForcePathTest, force_1level_sparse_field) {
+    FlatJsonConfig cfg(true, 0.3, 0.9, 100);
+    cfg.set_column_paths({"k2"});
+
+    auto jf = derive({
+        R"({"k1": 1, "k2": 42})",
+        R"({"k1": 2})",
+        R"({"k1": 3})",
+    }, cfg);
+
+    auto paths = jf.flat_paths();
+    EXPECT_NE(std::find(paths.begin(), paths.end(), "k1"), paths.end());
+    EXPECT_NE(std::find(paths.begin(), paths.end(), "k2"), paths.end());
+}
+
+// FORCE depth 2: sparse k2.j1 (1/3) forced → column, dense k2.j2 → normal column
+TEST_F(JsonPathDeriverForcePathTest, force_2level_sparse_nested) {
+    FlatJsonConfig cfg(true, 0.3, 0.9, 100);
+    cfg.set_column_paths({"k2.j1"});
+
+    auto jf = derive({
+        R"({"k1": 1, "k2": {"j1": 10, "j2": 100}})",
+        R"({"k1": 2, "k2": {"j2": 200}})",
+        R"({"k1": 3, "k2": {"j2": 300}})",
+    }, cfg);
+
+    auto paths = jf.flat_paths();
+    EXPECT_NE(std::find(paths.begin(), paths.end(), "k2.j1"), paths.end());
+    EXPECT_NE(std::find(paths.begin(), paths.end(), "k2.j2"), paths.end());
+}
+
+// FORCE depth 3: sparse k2.j1.p1 (1/3) forced → column, dense k2.j1.p2 → normal column
+TEST_F(JsonPathDeriverForcePathTest, force_3level_sparse_nested) {
+    FlatJsonConfig cfg(true, 0.3, 0.9, 100);
+    cfg.set_column_paths({"k2.j1.p1"});
+
+    auto jf = derive({
+        R"({"k1": 1, "k2": {"j1": {"p1": 99, "p2": 1}}})",
+        R"({"k1": 2, "k2": {"j1": {"p2": 2}}})",
+        R"({"k1": 3, "k2": {"j1": {"p2": 3}}})",
+    }, cfg);
+
+    auto paths = jf.flat_paths();
+    EXPECT_NE(std::find(paths.begin(), paths.end(), "k2.j1.p1"), paths.end());
+    EXPECT_NE(std::find(paths.begin(), paths.end(), "k2.j1.p2"), paths.end());
+}
+
+// FORCE not in data: force path with hits=0 must not become column
+TEST_F(JsonPathDeriverForcePathTest, force_path_not_in_data_is_excluded) {
+    FlatJsonConfig cfg(true, 0.3, 0.9, 100);
+    cfg.set_column_paths({"k2.j1"});
+
+    auto jf = derive({
+        R"({"k1": 1})",
+        R"({"k1": 2})",
+        R"({"k1": 3})",
+    }, cfg);
+
+    auto paths = jf.flat_paths();
+    EXPECT_EQ(std::find(paths.begin(), paths.end(), "k2.j1"), paths.end());
+}
+
+// FORCE mixed: sparse k2.j1 forced alongside dense k1, k2.j2
+TEST_F(JsonPathDeriverForcePathTest, force_mixed_sparse_and_dense) {
+    FlatJsonConfig cfg(true, 0.3, 0.9, 100);
+    cfg.set_column_paths({"k2.j1"});
+
+    auto jf = derive({
+        R"({"k1": 1, "k2": {"j1": 10, "j2": 100}})",
+        R"({"k1": 2, "k2": {"j2": 200}})",
+        R"({"k1": 3, "k2": {"j2": 300}})",
+        R"({"k1": 4, "k2": {"j2": 400}})",
+        R"({"k1": 5, "k2": {"j2": 500}})",
+    }, cfg);
+
+    auto paths = jf.flat_paths();
+    EXPECT_NE(std::find(paths.begin(), paths.end(), "k1"), paths.end());
+    EXPECT_NE(std::find(paths.begin(), paths.end(), "k2.j2"), paths.end());
+    EXPECT_NE(std::find(paths.begin(), paths.end(), "k2.j1"), paths.end());
+}
+
+// FORCE quota: column_paths_max=2 caps 3 force paths → excess goes to remain
+TEST_F(JsonPathDeriverForcePathTest, force_paths_max_quota) {
+    FlatJsonConfig cfg(true, 0.3, 0.0, 100);
+    cfg.set_column_paths({"k1", "k2", "k3"});
+    cfg.set_column_paths_max(2);
+
+    auto jf = derive({
+        R"({"k1": 1, "k2": 2, "k3": 3})",
+        R"({"k1": 4, "k2": 5, "k3": 6})",
+        R"({"k1": 7, "k2": 8, "k3": 9})",
+    }, cfg);
+
+    auto paths = jf.flat_paths();
+    size_t force_count = 0;
+    for (const auto& p : {"k1", "k2", "k3"}) {
+        if (std::find(paths.begin(), paths.end(), p) != paths.end()) force_count++;
+    }
+    EXPECT_LE(force_count, 2u);
+    EXPECT_TRUE(jf.has_remain_json());
+}
 
 } // namespace starrocks
