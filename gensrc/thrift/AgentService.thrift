@@ -90,7 +90,8 @@ struct TFlatJsonConfig {
     2: optional double flat_json_null_factor;
     3: optional double flat_json_sparsity_factor;
     4: optional i64 flat_json_column_max;
-    5: optional list<string> flat_json_column_paths;
+    // Per-JSON-column force-flatten paths: column_name -> list of dot-separated paths (no leading "$.").
+    5: optional map<string, list<string>> flat_json_column_paths;
     6: optional i64 flat_json_column_paths_max;
 }
 

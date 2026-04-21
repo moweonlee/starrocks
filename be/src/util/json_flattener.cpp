@@ -391,12 +391,18 @@ JsonPathDeriver::JsonPathDeriver(const std::vector<std::string>& paths, const st
     }
 }
 
-void JsonPathDeriver::init_flat_json_config(const FlatJsonConfig* flat_json_config) {
+void JsonPathDeriver::init_flat_json_config(const FlatJsonConfig* flat_json_config, const std::string& column_name) {
     if (flat_json_config != nullptr) {
         _max_json_null_factor = flat_json_config->get_flat_json_null_factor();
         _min_json_sparsity_factory = flat_json_config->get_flat_json_sparsity_factor();
         _max_column = flat_json_config->get_flat_json_max_column_max();
-        _column_paths = flat_json_config->get_column_paths();
+        _column_paths.clear();
+        if (!column_name.empty()) {
+            // Load only the paths targeted at this specific JSON column.
+            if (const auto* paths = flat_json_config->get_column_paths_for(column_name); paths != nullptr) {
+                _column_paths = *paths;
+            }
+        }
         _column_paths_max = flat_json_config->get_column_paths_max();
     } else {
         _max_json_null_factor = config::json_flat_null_factor;

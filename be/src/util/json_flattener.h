@@ -123,7 +123,10 @@ class JsonPathDeriver {
 public:
     JsonPathDeriver();
     JsonPathDeriver(const std::vector<std::string>& paths, const std::vector<LogicalType>& types, bool has_remain);
-    void init_flat_json_config(const FlatJsonConfig* flat_json_config);
+    // column_name: identifier of the JSON column being derived. Force-flatten paths
+    // configured for this specific column are applied; paths targeted at other columns
+    // are ignored. Pass empty string to disable per-column force-flatten.
+    void init_flat_json_config(const FlatJsonConfig* flat_json_config, const std::string& column_name = "");
 
     ~JsonPathDeriver() = default;
 

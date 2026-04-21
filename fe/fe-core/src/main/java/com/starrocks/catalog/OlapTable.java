@@ -3155,13 +3155,16 @@ public class OlapTable extends Table {
                     properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX, flatJsonColumnMax);
                 }
 
-                // flat json force paths
-                String flatJsonColumnPaths = tableProperties.get(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS);
-                if (!Strings.isNullOrEmpty(flatJsonColumnPaths)) {
-                    properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS, flatJsonColumnPaths);
+                // flat json per-column force paths: forward any key under the prefix verbatim
+                for (Map.Entry<String, String> entry : tableProperties.entrySet()) {
+                    String key = entry.getKey();
+                    if (key.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)
+                            && !Strings.isNullOrEmpty(entry.getValue())) {
+                        properties.put(key, entry.getValue());
+                    }
                 }
 
-                // flat json force paths max
+                // flat json force paths global max
                 String flatJsonColumnPathsMax =
                         tableProperties.get(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX);
                 if (!Strings.isNullOrEmpty(flatJsonColumnPathsMax)) {

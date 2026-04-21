@@ -451,30 +451,50 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
                                     " haven't been enabled");
                 }
             }
-        } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS) ||
-                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_ADD) ||
-                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_REMOVE) ||
-                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX)) {
+        } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX) ||
+                PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties)) {
             if (table instanceof OlapTable) {
                 OlapTable olapTable = (OlapTable) table;
                 if (olapTable.getFlatJsonConfig() == null || !olapTable.getFlatJsonConfig().getFlatJsonEnable()) {
                     ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
                             "Property " + PropertyAnalyzer.PROPERTIES_FLAT_JSON_ENABLE + " haven't been enabled");
                 }
-                if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS)) {
-                    PropertyAnalyzer.analyzeFlatJsonColumnPaths(properties);
+                // Collect the table's JSON column names so we can reject unknown targets early.
+                java.util.Set<String> jsonColumnNames = new java.util.HashSet<>();
+                for (Column col : olapTable.getBaseSchema()) {
+                    if (col.getType() != null && col.getType().isJsonType()) {
+                        jsonColumnNames.add(col.getName());
+                    }
                 }
-                if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_ADD)) {
+                // Validate every column_paths.* key references an existing JSON column. The
+                // per-column prefix covers both the bare "<col>" replace form and the
+                // "<col>.add"/".remove" incremental forms.
+                for (String key : properties.keySet()) {
+                    if (!key.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)) {
+                        continue;
+                    }
+                    String suffix = key.substring(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX.length());
+                    String columnName;
+                    if (suffix.endsWith("." + PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD)) {
+                        columnName = suffix.substring(0,
+                                suffix.length() - PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD.length() - 1);
+                    } else if (suffix.endsWith("." + PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE)) {
+                        columnName = suffix.substring(0,
+                                suffix.length() - PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE.length() - 1);
+                    } else {
+                        columnName = suffix;
+                    }
+                    if (columnName.isEmpty()) {
+                        ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
+                                "Invalid property key '" + key + "': missing JSON column name");
+                    }
+                    if (!jsonColumnNames.contains(columnName)) {
+                        ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
+                                "Property '" + key + "' references unknown or non-JSON column '" + columnName + "'");
+                    }
+                    // Run path-format validation (throws SemanticException on bad input).
                     PropertyAnalyzer.analyzeFlatJsonColumnPaths(
-                            java.util.Collections.singletonMap(
-                                    PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS,
-                                    properties.get(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_ADD)));
-                }
-                if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_REMOVE)) {
-                    PropertyAnalyzer.analyzeFlatJsonColumnPaths(
-                            java.util.Collections.singletonMap(
-                                    PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS,
-                                    properties.get(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_REMOVE)));
+                            java.util.Collections.singletonMap(key, properties.get(key)));
                 }
                 if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX)) {
                     PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties);
