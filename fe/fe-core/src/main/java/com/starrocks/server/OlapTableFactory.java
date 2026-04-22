@@ -933,6 +933,22 @@ public class OlapTableFactory implements AbstractTableFactory {
                     PropertyAnalyzer.analyzeFlatJsonColumnPaths(properties);
             int columnPathsMax = PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties);
 
+            // Validate that every column named in perCol is a JSON-typed column in the schema.
+            if (!perCol.isEmpty()) {
+                java.util.Set<String> jsonColumnNames = new java.util.HashSet<>();
+                for (Column col : table.getBaseSchema()) {
+                    if (col.getType() != null && col.getType().isJsonType()) {
+                        jsonColumnNames.add(col.getName());
+                    }
+                }
+                for (String colName : perCol.keySet()) {
+                    if (!jsonColumnNames.contains(colName)) {
+                        throw new DdlException(
+                                "flat_json.column_paths references unknown or non-JSON column: '" + colName + "'");
+                    }
+                }
+            }
+
             // Remove the per-column keys from the raw properties map so downstream handlers
             // don't re-process them, but let them be re-emitted later via FlatJsonConfig.toProperties().
             properties.keySet().removeIf(k ->
