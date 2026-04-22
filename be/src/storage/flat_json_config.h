@@ -140,6 +140,14 @@ public:
         }
     }
 
+    // Update function using four parameters (kept for backward compatibility with original API)
+    void update(bool enable, double nullFactor, double sparsityFactor, int maxColumnMax) {
+        _flat_json_enable = enable;
+        _flat_json_null_factor = nullFactor;
+        _flat_json_sparsity_factor = sparsityFactor;
+        _flat_json_max_column_max = maxColumnMax;
+    }
+
     // Copy Assignment
     FlatJsonConfig& operator=(const FlatJsonConfig& other) {
         if (this != &other) {

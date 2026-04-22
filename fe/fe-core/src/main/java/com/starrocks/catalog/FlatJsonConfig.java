@@ -202,7 +202,7 @@ public class FlatJsonConfig implements Writable {
         return properties;
     }
 
-    public TFlatJsonConfig toThrift() {
+    public TFlatJsonConfig toTFlatJsonConfig() {
         TFlatJsonConfig tFlatJsonConfig = new TFlatJsonConfig();
         tFlatJsonConfig.setFlat_json_enable(flatJsonEnable);
         tFlatJsonConfig.setFlat_json_null_factor(flatJsonNullFactor);
