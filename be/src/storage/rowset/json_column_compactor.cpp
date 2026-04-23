@@ -47,7 +47,7 @@ Status FlatJsonColumnCompactor::_compact_columns(MutableColumns& json_datas) {
         vc.emplace_back(js.get());
     }
     deriver.set_generate_filter(true);
-    deriver.init_flat_json_config(_flat_json_config);
+    deriver.init_flat_json_config(_flat_json_config, _column_name);
 
     deriver.derived(vc);
 

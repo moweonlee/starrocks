@@ -178,6 +178,22 @@ public class PropertyAnalyzer {
 
     public static final String PROPERTIES_FLAT_JSON_COLUMN_MAX = "flat_json.column.max";
 
+    // Per-JSON-column force-flatten paths are expressed as keys of the form:
+    //   flat_json.column_paths.<json_column_name>              = "$.path1, $.path2"    (full replace)
+    //   flat_json.column_paths.<json_column_name>.add          = "$.path3"              (incremental add)
+    //   flat_json.column_paths.<json_column_name>.remove       = "$.path1"              (incremental remove)
+    // Reserved suffixes: "add", "remove" (cannot be used as json column names for the .add/.remove ops).
+    public static final String PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX = "flat_json.column_paths.";
+
+    // Operation suffixes for incremental updates (ALTER TABLE SET only).
+    public static final String FLAT_JSON_COLUMN_PATHS_OP_ADD = "add";
+    public static final String FLAT_JSON_COLUMN_PATHS_OP_REMOVE = "remove";
+
+    // Global upper bound on force-flatten columns per JSON column. Distinct from flat_json.column.max
+    // which caps auto-detected sparse-derived columns. Uses underscore (not dot) to avoid
+    // collision with a user-supplied JSON column literally named "max".
+    public static final String PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX = "flat_json.column_paths_max";
+
     public static final String PROPERTIES_STORAGE_TYPE_COLUMN = "column";
     public static final String PROPERTIES_STORAGE_TYPE_COLUMN_WITH_ROW = "column_with_row";
 
@@ -632,6 +648,125 @@ public class PropertyAnalyzer {
             flatJsonEnabled = Boolean.parseBoolean(properties.get(PROPERTIES_FLAT_JSON_ENABLE));
         }
         return flatJsonEnabled;
+    }
+
+    // Returns true if the properties map contains ANY flat_json.column_paths.* key (replace/add/remove)
+    // or the global flat_json.column_paths_max key.
+    public static boolean hasFlatJsonColumnPathsProperty(Map<String, String> properties) {
+        if (properties == null) {
+            return false;
+        }
+        if (properties.containsKey(PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX)) {
+            return true;
+        }
+        for (String key : properties.keySet()) {
+            if (key.startsWith(PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Parses a comma-separated list of JSON paths. Strips the optional "$." prefix so the
+    // returned strings are in internal dot-separated form ("a.b.c"). Empty tokens are skipped.
+    private static java.util.List<String> parseFlatJsonPathList(String raw) {
+        if (raw == null) {
+            return java.util.Collections.emptyList();
+        }
+        raw = raw.trim();
+        if (raw.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+        java.util.List<String> result = new java.util.ArrayList<>();
+        for (String part : raw.split(",")) {
+            String path = part.trim();
+            if (path.startsWith("$.")) {
+                path = path.substring(2);
+            }
+            if (!path.isEmpty()) {
+                result.add(path);
+            }
+        }
+        return java.util.Collections.unmodifiableList(result);
+    }
+
+    // Splits a property key "flat_json.column_paths.<col>[.<op>]" into (columnName, op).
+    // op is "" for bare keys (full replace), or "add"/"remove" for incremental ops.
+    // Returns null if the key is not a flat_json.column_paths.* key.
+    private static String[] splitColumnPathsKey(String key) {
+        if (!key.startsWith(PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)) {
+            return null;
+        }
+        String suffix = key.substring(PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX.length());
+        if (suffix.isEmpty()) {
+            return null;
+        }
+        // Check if the key ends with ".add" or ".remove" (operation suffix).
+        if (suffix.endsWith("." + FLAT_JSON_COLUMN_PATHS_OP_ADD)) {
+            String col = suffix.substring(0, suffix.length() - FLAT_JSON_COLUMN_PATHS_OP_ADD.length() - 1);
+            if (!col.isEmpty()) {
+                return new String[] {col, FLAT_JSON_COLUMN_PATHS_OP_ADD};
+            }
+        } else if (suffix.endsWith("." + FLAT_JSON_COLUMN_PATHS_OP_REMOVE)) {
+            String col = suffix.substring(0, suffix.length() - FLAT_JSON_COLUMN_PATHS_OP_REMOVE.length() - 1);
+            if (!col.isEmpty()) {
+                return new String[] {col, FLAT_JSON_COLUMN_PATHS_OP_REMOVE};
+            }
+        }
+        return new String[] {suffix, ""};
+    }
+
+    // Extracts per-column full-replace entries: "flat_json.column_paths.<col>" -> List<path>.
+    // Keys with .add/.remove suffix are NOT included here (use analyzeFlatJsonColumnPathsOps).
+    public static java.util.Map<String, java.util.List<String>> analyzeFlatJsonColumnPaths(
+            Map<String, String> properties) {
+        java.util.Map<String, java.util.List<String>> result = new java.util.HashMap<>();
+        if (properties == null) {
+            return result;
+        }
+        for (Map.Entry<String, String> entry : properties.entrySet()) {
+            String[] parts = splitColumnPathsKey(entry.getKey());
+            if (parts == null || !parts[1].isEmpty()) {
+                continue;
+            }
+            result.put(parts[0], parseFlatJsonPathList(entry.getValue()));
+        }
+        return result;
+    }
+
+    // Extracts per-column incremental op entries.
+    //   op = "add"    -> keys of the form "flat_json.column_paths.<col>.add"
+    //   op = "remove" -> keys of the form "flat_json.column_paths.<col>.remove"
+    public static java.util.Map<String, java.util.List<String>> analyzeFlatJsonColumnPathsOps(
+            Map<String, String> properties, String op) {
+        java.util.Map<String, java.util.List<String>> result = new java.util.HashMap<>();
+        if (properties == null) {
+            return result;
+        }
+        for (Map.Entry<String, String> entry : properties.entrySet()) {
+            String[] parts = splitColumnPathsKey(entry.getKey());
+            if (parts == null || !op.equals(parts[1])) {
+                continue;
+            }
+            result.put(parts[0], parseFlatJsonPathList(entry.getValue()));
+        }
+        return result;
+    }
+
+    public static int analyzeFlatJsonColumnPathsMax(Map<String, String> properties) {
+        if (properties == null || !properties.containsKey(PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX)) {
+            return -1;
+        }
+        int max;
+        try {
+            max = Integer.parseInt(properties.get(PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX));
+        } catch (NumberFormatException e) {
+            throw new SemanticException(PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX + ": " + e.getMessage());
+        }
+        if (max < 0) {
+            throw new SemanticException("Illegal " + PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX + ": " + max);
+        }
+        return max;
     }
 
     public static boolean analyzeEnableLoadProfile(Map<String, String> properties) {
