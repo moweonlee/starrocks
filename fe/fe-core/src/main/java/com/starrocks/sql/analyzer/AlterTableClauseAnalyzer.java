@@ -481,6 +481,11 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
             if (table instanceof OlapTable &&
                     (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX) ||
                             PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties))) {
+                if (!"true".equalsIgnoreCase(properties.get(PropertyAnalyzer.PROPERTIES_FLAT_JSON_ENABLE))) {
+                    ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
+                            "flat_json.column_paths can only be set when " +
+                                    PropertyAnalyzer.PROPERTIES_FLAT_JSON_ENABLE + " is true");
+                }
                 validateFlatJsonColumnPathsProperties(properties, (OlapTable) table);
             }
         } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
