@@ -46,8 +46,9 @@ public class FlatJsonConfig implements Writable {
     @SerializedName("flatJsonColumnPaths")
     private Map<String, List<String>> flatJsonColumnPaths;
 
-    // Upper bound on force-flatten columns per JSON column (independent of flatJsonColumnMax).
-    // 0 means "use BE default".
+    // Per-column cap on force-flatten paths. 0 = use all specified paths (no artificial cap,
+    // bounded by the system column count limit). Default: 100. When cap < path count, the
+    // first N paths in user-specified order are kept.
     @SerializedName("flatJsonColumnPathsMax")
     private int flatJsonColumnPathsMax;
 
@@ -212,9 +213,8 @@ public class FlatJsonConfig implements Writable {
         if (!paths.isEmpty()) {
             tFlatJsonConfig.setFlat_json_column_paths(new TreeMap<>(paths));
         }
-        if (flatJsonColumnPathsMax > 0) {
-            tFlatJsonConfig.setFlat_json_column_paths_max(flatJsonColumnPathsMax);
-        }
+        // Always send column_paths_max so BE sees 0 as "use all specified paths".
+        tFlatJsonConfig.setFlat_json_column_paths_max(flatJsonColumnPathsMax);
         return tFlatJsonConfig;
     }
 

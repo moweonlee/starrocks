@@ -775,9 +775,10 @@ void JsonPathDeriver::_finalize() {
         }
     }
 
-    // Apply _column_paths_max quota to force leaves (sort by hits desc for determinism).
-    std::sort(forced_leaves.begin(), forced_leaves.end(),
-              [](const auto& a, const auto& b) { return a.first->hits > b.first->hits; });
+    // Apply _column_paths_max quota to force leaves.
+    // Truncation follows user-specified order (left-to-right), not hits, so the user
+    // controls which paths survive when column_paths_max < len(column_paths).
+    // 0 means "use all specified paths" (no artificial cap).
     size_t force_limit = (_column_paths_max > 0)
                                  ? static_cast<size_t>(_column_paths_max)
                                  : std::numeric_limits<size_t>::max();
