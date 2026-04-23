@@ -2516,6 +2516,27 @@ public class SchemaChangeHandler extends AlterHandler {
         }
     }
 
+    // Extracts the JSON column name from a key of the form
+    //   flat_json.column_paths.<col_name>        (returns col_name)
+    //   flat_json.column_paths.<col_name>.add    (returns col_name)
+    //   flat_json.column_paths.<col_name>.remove (returns col_name)
+    // Returns empty string if the key does not match. Used by ALTER to detect stale
+    // per-column properties that should be erased before leader->follower replication.
+    private static String extractColumnNameForFlatJsonKey(String key) {
+        if (!key.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)) {
+            return "";
+        }
+        String suffix = key.substring(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX.length());
+        if (suffix.endsWith("." + PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD)) {
+            return suffix.substring(0, suffix.length() - PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD.length() - 1);
+        }
+        if (suffix.endsWith("." + PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE)) {
+            return suffix.substring(0,
+                    suffix.length() - PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE.length() - 1);
+        }
+        return suffix;
+    }
+
     public boolean updateFlatJsonConfigMeta(Database db, Long tableId, Map<String, String> properties,
                                             TTabletMetaType metaType) {
         FlatJsonConfig newFlatJsonConfig;
@@ -2550,10 +2571,12 @@ public class SchemaChangeHandler extends AlterHandler {
         // Check if other flat JSON properties are set when flat_json.enable is false
         if (!flatJsonEnabled && (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
-                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX))) {
+                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX) ||
+                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX) ||
+                PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties))) {
             throw new RuntimeException("flat JSON configuration must be set after enabling flat JSON.");
         }
-        
+
         if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR)) {
             double flatJsonNullFactor = PropertyAnalyzer.analyzeFlatJsonNullFactor(properties);
             if (flatJsonNullFactor != newFlatJsonConfig.getFlatJsonNullFactor()) {
@@ -2575,6 +2598,52 @@ public class SchemaChangeHandler extends AlterHandler {
                 hasChanged = true;
             }
         }
+        // Per-column full-replace: flat_json.column_paths.<col> = "..."
+        java.util.Map<String, java.util.List<String>> replaceMap =
+                PropertyAnalyzer.analyzeFlatJsonColumnPaths(properties);
+        for (java.util.Map.Entry<String, java.util.List<String>> entry : replaceMap.entrySet()) {
+            java.util.List<String> existing = newFlatJsonConfig.getColumnPaths(entry.getKey());
+            if (!entry.getValue().equals(existing)) {
+                newFlatJsonConfig.setColumnPaths(entry.getKey(), entry.getValue());
+                hasChanged = true;
+            }
+        }
+        // Per-column incremental add: flat_json.column_paths.<col>.add = "..."
+        java.util.Map<String, java.util.List<String>> addMap = PropertyAnalyzer.analyzeFlatJsonColumnPathsOps(
+                properties, PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD);
+        for (java.util.Map.Entry<String, java.util.List<String>> entry : addMap.entrySet()) {
+            java.util.List<String> current = new java.util.ArrayList<>(
+                    newFlatJsonConfig.getColumnPaths(entry.getKey()));
+            boolean localChanged = false;
+            for (String path : entry.getValue()) {
+                if (!current.contains(path)) {
+                    current.add(path);
+                    localChanged = true;
+                }
+            }
+            if (localChanged) {
+                newFlatJsonConfig.setColumnPaths(entry.getKey(), current);
+                hasChanged = true;
+            }
+        }
+        // Per-column incremental remove: flat_json.column_paths.<col>.remove = "..."
+        java.util.Map<String, java.util.List<String>> removeMap = PropertyAnalyzer.analyzeFlatJsonColumnPathsOps(
+                properties, PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE);
+        for (java.util.Map.Entry<String, java.util.List<String>> entry : removeMap.entrySet()) {
+            java.util.List<String> current = new java.util.ArrayList<>(
+                    newFlatJsonConfig.getColumnPaths(entry.getKey()));
+            if (current.removeAll(entry.getValue())) {
+                newFlatJsonConfig.setColumnPaths(entry.getKey(), current);
+                hasChanged = true;
+            }
+        }
+        if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX)) {
+            int max = PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties);
+            if (max >= 0 && max != newFlatJsonConfig.getFlatJsonColumnPathsMax()) {
+                newFlatJsonConfig.setFlatJsonColumnPathsMax(max);
+                hasChanged = true;
+            }
+        }
         if (!hasChanged) {
             LOG.info("table {} flat json config is same as the previous config, so nothing need to do", olapTable.getName());
             return true;
@@ -2582,6 +2651,16 @@ public class SchemaChangeHandler extends AlterHandler {
 
         locker.lockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.WRITE);
         try {
+            // Erase stale per-column properties inside the write lock so the removal and the
+            // WAL write are atomic. Keeping this outside the lock created a window where
+            // SHOW CREATE TABLE could observe the old keys already removed but the new values
+            // not yet applied (i.e. column_paths momentarily absent from properties).
+            // The follower-sync guarantee is unchanged: toProperties() re-emits only surviving
+            // entries, and the replay path clears all column_paths keys before putAll anyway.
+            olapTable.getTableProperty().getProperties().keySet().removeIf(k ->
+                    k.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX) &&
+                            !newFlatJsonConfig.getFlatJsonColumnPaths().containsKey(
+                                    extractColumnNameForFlatJsonKey(k)));
             GlobalStateMgr.getCurrentState().getLocalMetastore().modifyFlatJsonMeta(db, olapTable, newFlatJsonConfig);
         } catch (Exception e) {
             isModifiedSuccess = false;
