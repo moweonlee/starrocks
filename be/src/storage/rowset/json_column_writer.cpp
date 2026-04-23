@@ -90,7 +90,7 @@ Status FlatJsonColumnWriter::_flat_column(MutableColumns& json_datas) {
     FlatJsonMetrics::instance()->flat_json_segment_write_total.increment(1);
     // all json datas must full json
     JsonPathDeriver deriver;
-    deriver.init_flat_json_config(_flat_json_config);
+    deriver.init_flat_json_config(_flat_json_config, _column_name);
     deriver.set_generate_filter(true);
 
     std::vector<const Column*> vc;

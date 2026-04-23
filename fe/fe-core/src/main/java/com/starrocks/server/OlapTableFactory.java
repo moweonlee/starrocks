@@ -916,7 +916,9 @@ public class OlapTableFactory implements AbstractTableFactory {
             // Check if other flat JSON properties are set when flat_json.enable is false
             if (!enableFlatJson && (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                     properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
-                    properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX))) {
+                    properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX) ||
+                    properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX) ||
+                    PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties))) {
                 throw new DdlException("flat JSON configuration must be set after enabling flat JSON.");
             }
 
@@ -926,9 +928,42 @@ public class OlapTableFactory implements AbstractTableFactory {
                     PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR, Config.flat_json_sparsity_factory);
             int flatJsonColumnMax = PropertyAnalyzer.analyzeIntProp(properties,
                     PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX, Config.flat_json_column_max);
+            // Per-column force-flatten paths (only full-replace keys are valid at CREATE time;
+            // .add/.remove are ALTER-only ops).
+            java.util.Map<String, java.util.List<String>> perCol =
+                    PropertyAnalyzer.analyzeFlatJsonColumnPaths(properties);
+            int columnPathsMax = PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties);
+
+            // Validate that every column named in perCol is a JSON-typed column in the schema.
+            if (!perCol.isEmpty()) {
+                java.util.Set<String> jsonColumnNames = new java.util.HashSet<>();
+                for (Column col : table.getBaseSchema()) {
+                    if (col.getType() != null && col.getType().isJsonType()) {
+                        jsonColumnNames.add(col.getName());
+                    }
+                }
+                for (String colName : perCol.keySet()) {
+                    if (!jsonColumnNames.contains(colName)) {
+                        throw new DdlException(
+                                "flat_json.column_paths references unknown or non-JSON column: '" + colName + "'");
+                    }
+                }
+            }
+
+            // Remove the per-column keys from the raw properties map so downstream handlers
+            // don't re-process them, but let them be re-emitted later via FlatJsonConfig.toProperties().
+            properties.keySet().removeIf(k ->
+                    k.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX));
+            properties.remove(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX);
 
             FlatJsonConfig flatJsonConfig = new FlatJsonConfig(enableFlatJson, flatJsonNullFactor,
                     flatJsonSparsityFactory, flatJsonColumnMax);
+            if (!perCol.isEmpty()) {
+                flatJsonConfig.setFlatJsonColumnPaths(perCol);
+            }
+            if (columnPathsMax >= 0) {
+                flatJsonConfig.setFlatJsonColumnPathsMax(columnPathsMax);
+            }
 
             table.setFlatJsonConfig(flatJsonConfig);
             LOG.info("create table {} set flat json config: {}", tableName, flatJsonConfig.toString());
@@ -941,6 +976,8 @@ public class OlapTableFactory implements AbstractTableFactory {
         return properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_ENABLE) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
-                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX);
+                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX) ||
+                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX) ||
+                PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties);
     }
 }

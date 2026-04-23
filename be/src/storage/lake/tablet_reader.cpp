@@ -272,7 +272,7 @@ Status TabletReader::init_compaction_column_paths(const TabletReaderParams& read
                 metadata && metadata->has_flat_json_config()) {
                 auto flat_json_config = std::make_shared<FlatJsonConfig>();
                 flat_json_config->update(metadata->flat_json_config());
-                deriver.init_flat_json_config(flat_json_config.get());
+                deriver.init_flat_json_config(flat_json_config.get(), col_name);
             }
 
             deriver.derived(readers);
