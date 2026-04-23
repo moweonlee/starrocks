@@ -2644,16 +2644,6 @@ public class SchemaChangeHandler extends AlterHandler {
                 hasChanged = true;
             }
         }
-        // IMPORTANT: erase stale per-column properties that no longer map to an entry in
-        // newFlatJsonConfig. Otherwise TableProperty.modifyTableProperties(putAll)
-        // on the follower FE would retain the old value, diverging from the leader.
-        // (This is the follower-sync fix; FlatJsonConfig.toProperties() will re-emit only
-        // current entries, and removal of a column_paths.<col> entry here flushes the
-        // stale key so the leader's properties map stays in sync with its config.)
-        olapTable.getTableProperty().getProperties().keySet().removeIf(k ->
-                k.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX) &&
-                        !newFlatJsonConfig.getFlatJsonColumnPaths().containsKey(
-                                extractColumnNameForFlatJsonKey(k)));
         if (!hasChanged) {
             LOG.info("table {} flat json config is same as the previous config, so nothing need to do", olapTable.getName());
             return true;
@@ -2661,6 +2651,16 @@ public class SchemaChangeHandler extends AlterHandler {
 
         locker.lockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.WRITE);
         try {
+            // Erase stale per-column properties inside the write lock so the removal and the
+            // WAL write are atomic. Keeping this outside the lock created a window where
+            // SHOW CREATE TABLE could observe the old keys already removed but the new values
+            // not yet applied (i.e. column_paths momentarily absent from properties).
+            // The follower-sync guarantee is unchanged: toProperties() re-emits only surviving
+            // entries, and the replay path clears all column_paths keys before putAll anyway.
+            olapTable.getTableProperty().getProperties().keySet().removeIf(k ->
+                    k.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX) &&
+                            !newFlatJsonConfig.getFlatJsonColumnPaths().containsKey(
+                                    extractColumnNameForFlatJsonKey(k)));
             GlobalStateMgr.getCurrentState().getLocalMetastore().modifyFlatJsonMeta(db, olapTable, newFlatJsonConfig);
         } catch (Exception e) {
             isModifiedSuccess = false;
