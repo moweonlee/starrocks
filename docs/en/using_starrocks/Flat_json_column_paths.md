@@ -46,7 +46,10 @@ flat_json.column_paths_max                            = <int>                   
   `ALTER TABLE ... SET (...)` — not at `CREATE TABLE` time.
 - `flat_json.column_paths_max` caps the number of force-flattened columns **per
   JSON column**, independent of `flat_json.column.max` (which caps
-  sparsity-derived columns). Default is `200`.
+  sparsity-derived columns). Default is `100`. When the cap is smaller than the
+  number of configured paths, the **first N paths in user-specified order** are
+  kept (left-to-right, not by hit frequency). Setting it to `0` means "use all
+  specified paths" (bounded only by the system column count limit).
 
 ## Prerequisites
 
@@ -77,7 +80,7 @@ PROPERTIES (
     "flat_json.column.max"              = "50",
     -- Force-flatten events.browser and events.utm_source regardless of sparsity.
     "flat_json.column_paths.events"     = "$.browser, $.utm_source",
-    -- Per-column cap on force paths (optional; default is 200).
+    -- Per-column cap on force paths (optional; default is 100).
     "flat_json.column_paths_max"        = "20"
 );
 ```
@@ -147,7 +150,7 @@ ALTER TABLE user_events SET (
 ALTER TABLE user_events SET ("flat_json.column_paths_max" = "50");
 ```
 
-Setting it to `0` resets to the server default (`200`).
+Setting it to `0` means "use all specified paths" (no artificial cap; bounded only by the system column count limit).
 
 ### Combined example
 
@@ -283,7 +286,7 @@ Repeat Step 3 to confirm `browser` is now present.
 | `flat JSON configuration must be set after enabling flat JSON.` | Tried to set `column_paths` on a table with `flat_json.enable = false`. | `ALTER TABLE t SET ("flat_json.enable" = "true");` first.                  |
 | `flat_json_meta` does not list a configured path           | The path does not appear in ANY row yet (`hits = 0`).                    | Load data containing the path, or wait until such rows arrive.             |
 | `AccessPathHits = 0` but sub-column exists                 | Query reads old rowsets predating the config change.                     | Run `ALTER TABLE t COMPACT;` to re-flatten.                                |
-| Configured paths exceed the quota                          | `flat_json.column_paths_max` reached for that JSON column.               | Raise the cap, or prune the list with `.remove`.                           |
+| Configured paths exceed the quota                          | `flat_json.column_paths_max` reached for that JSON column (default 100). | Raise the cap, set to 0 for no limit, or prune the list with `.remove`.    |
 | Sync appears wrong on follower FE after removing paths     | Older builds had an emit-only-if-non-empty bug.                          | This page's design emits the full state on every write (fixed).            |
 
 ## Metadata and cluster-wide consistency
