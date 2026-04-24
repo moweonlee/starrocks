@@ -400,7 +400,7 @@ void JsonPathDeriver::init_flat_json_config(const FlatJsonConfig* flat_json_conf
         if (!column_name.empty()) {
             // Load only the paths targeted at this specific JSON column.
             if (const auto* paths = flat_json_config->get_column_paths_for(column_name); paths != nullptr) {
-                _column_paths = *paths;
+                _column_paths.insert(paths->begin(), paths->end());
             }
         }
         _column_paths_max = flat_json_config->get_column_paths_max();
