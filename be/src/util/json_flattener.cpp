@@ -423,9 +423,29 @@ void JsonPathDeriver::derived(const std::vector<const Column*>& json_datas) {
 
     auto res = check_null_factor(json_datas);
     if (!res.ok()) {
-        return;
+        // null_factor is a heuristic gate for AUTO flatten decisions (sparsity-based).
+        // Forced paths configured via flat_json.column_paths.<col> are an explicit
+        // operator override; they must not be silently disabled by the null
+        // heuristic. If any forced paths are present, bypass the null gate and
+        // continue. Total non-null row count for sparsity arithmetic is recomputed
+        // from column sizes minus null counts (best-effort; the auto branch simply
+        // won't pass anyway when null is dominant, which is fine).
+        if (_column_paths.empty()) {
+            return;
+        }
+        size_t total = 0, nulls = 0;
+        for (const auto& col : json_datas) {
+            total += col->size();
+            if (col->only_null() || col->empty()) {
+                nulls += col->size();
+            } else if (col->is_nullable()) {
+                nulls += down_cast<const NullableColumn*>(col)->null_count();
+            }
+        }
+        _total_rows = total - nulls;
+    } else {
+        _total_rows = res.value();
     }
-    _total_rows = res.value();
 
     _path_root = std::make_shared<JsonFlatPath>();
     // Pre-mark force paths so _clean_sparsity_path never prunes them.
