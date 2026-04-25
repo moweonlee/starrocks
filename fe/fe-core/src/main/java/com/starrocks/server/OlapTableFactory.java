@@ -260,7 +260,7 @@ public class OlapTableFactory implements AbstractTableFactory {
                 String storageVolumeId = svm.getStorageVolumeIdOfTable(tableId);
                 metastore.setLakeStorageInfo(db, table, storageVolumeId, properties);
 
-                processFlatJsonConfig(properties, table, tableName);
+                processFlatJsonConfig(properties, table, baseSchema, tableName);
             } else {
                 table = new OlapTable(tableId, tableName, baseSchema, keysType, partitionInfo, distributionInfo, indexes);
             }
@@ -453,7 +453,7 @@ public class OlapTableFactory implements AbstractTableFactory {
                 }
             }
 
-            processFlatJsonConfig(properties, table, tableName);
+            processFlatJsonConfig(properties, table, baseSchema, tableName);
 
             try {
                 Optional<Long> bucketSize = PropertyAnalyzer.analyzeLongProp(properties,
@@ -902,7 +902,8 @@ public class OlapTableFactory implements AbstractTableFactory {
         olapTable.setForeignKeyConstraints(foreignKeyConstraints);
     }
 
-    private void processFlatJsonConfig(Map<String, String> properties, OlapTable table, String tableName)
+    private void processFlatJsonConfig(Map<String, String> properties, OlapTable table,
+                                       List<Column> baseSchema, String tableName)
             throws DdlException {
         if (properties == null || !hasFlatJsonProperties(properties)) {
             return;
@@ -934,9 +935,13 @@ public class OlapTableFactory implements AbstractTableFactory {
             int columnPathsMax = PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties);
 
             // Validate that every column named in perCol is a JSON-typed column in the schema.
+            // NOTE: use the `baseSchema` parameter directly. table.getBaseSchema() goes through
+            // baseIndexMetaId/indexIdToMeta which are not yet populated at CREATE TABLE time,
+            // so it would return an empty list and every per-column key would falsely be reported
+            // as "unknown or non-JSON".
             if (!perCol.isEmpty()) {
                 java.util.Set<String> jsonColumnNames = new java.util.HashSet<>();
-                for (Column col : table.getBaseSchema()) {
+                for (Column col : baseSchema) {
                     if (col.getType() != null && col.getType().isJsonType()) {
                         jsonColumnNames.add(col.getName());
                     }
