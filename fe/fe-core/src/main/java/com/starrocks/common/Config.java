@@ -3654,6 +3654,9 @@ public class Config extends ConfigBase {
     @ConfField
     public static int flat_json_column_max = 100;
 
+    @ConfField
+    public static int flat_json_column_paths_max = 0;
+
     /**
      * Enable check if the cluster is under safe mode or not
      **/
