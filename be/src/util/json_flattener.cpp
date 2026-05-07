@@ -408,6 +408,7 @@ void JsonPathDeriver::init_flat_json_config(const FlatJsonConfig* flat_json_conf
         _max_json_null_factor = config::json_flat_null_factor;
         _min_json_sparsity_factory = config::json_flat_sparsity_factor;
         _max_column = config::json_flat_column_max;
+        _column_paths_max = config::flat_json_column_paths_max;
     }
 }
 
