@@ -178,7 +178,7 @@ public class PropertyAnalyzer {
 
     public static final String PROPERTIES_FLAT_JSON_COLUMN_MAX = "flat_json.column.max";
 
-    // Per-JSON-column force-flatten paths are expressed as keys of the form:
+    // Per-JSON-column user-specified column paths are expressed as keys of the form:
     //   flat_json.column_paths.<json_column_name>              = "$.path1, $.path2"    (full replace)
     //   flat_json.column_paths.<json_column_name>.add          = "$.path3"              (incremental add)
     //   flat_json.column_paths.<json_column_name>.remove       = "$.path1"              (incremental remove)
@@ -189,10 +189,8 @@ public class PropertyAnalyzer {
     public static final String FLAT_JSON_COLUMN_PATHS_OP_ADD = "add";
     public static final String FLAT_JSON_COLUMN_PATHS_OP_REMOVE = "remove";
 
-    // Per-JSON-column cap on force-flatten paths. Distinct from flat_json.column.max which caps
-    // auto-sampled paths. When column_paths_max < len(column_paths), the first N paths
-    // (in user-specified order) are kept. 0 = use all specified paths (bounded only by the
-    // system column count limit). Default: 100.
+    // Property key for the per-JSON-column cap on user-specified column paths.
+    // Distinct from flat_json.column.max (which caps auto-sampled paths). See FlatJsonConfig#flatJsonColumnPathsMax for full semantics.
     public static final String PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX = "flat_json.column_paths_max";
 
     public static final String PROPERTIES_STORAGE_TYPE_COLUMN = "column";

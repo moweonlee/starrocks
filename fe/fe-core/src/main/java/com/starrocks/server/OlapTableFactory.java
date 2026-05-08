@@ -992,8 +992,7 @@ public class OlapTableFactory implements AbstractTableFactory {
                 flatJsonConfig.setFlatJsonColumnPaths(perCol);
             }
             // Fall back to the cluster-wide system default when the user did not specify
-            // flat_json.column_paths_max in the table properties. Mirrors the pattern used
-            // for flat_json.null.factor / sparsity.factor / column.max above.
+            // flat_json.column_paths_max in the table properties.
             if (columnPathsMax < 0) {
                 columnPathsMax = Config.flat_json_column_paths_max;
             }

@@ -41,14 +41,14 @@ public class FlatJsonConfig implements Writable {
     @SerializedName("flatJsonColumnMax")
     private int flatJsonColumnMax;
 
-    // Per-JSON-column force-flatten paths: <json_column_name> -> list of dot-separated paths
-    // (no leading "$."). Empty/absent entry means the column has no forced paths.
+    // Per-JSON-column user-specified column paths: <json_column_name> -> list of dot-separated
+    // paths (no leading "$."). Empty/absent entry means the column has no user-specified paths.
     @SerializedName("flatJsonColumnPaths")
     private Map<String, List<String>> flatJsonColumnPaths;
 
-    // Per-column cap on force-flatten paths. 0 = use all specified paths (no artificial cap,
-    // bounded by the system column count limit). Default: 100. When cap < path count, the
-    // first N paths in user-specified order are kept.
+    // Per-column cap on user-specified column paths.
+    // 0 = use all specified paths (bounded only by the system column limit). Default: 100.
+    // When cap < path count, the first N paths in user-specified order are kept.
     @SerializedName("flatJsonColumnPathsMax")
     private int flatJsonColumnPathsMax;
 
