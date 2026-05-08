@@ -424,13 +424,9 @@ void JsonPathDeriver::derived(const std::vector<const Column*>& json_datas) {
 
     auto res = check_null_factor(json_datas);
     if (!res.ok()) {
-        // null_factor is a heuristic gate for AUTO flatten decisions (sparsity-based).
-        // Forced paths configured via flat_json.column_paths.<col> are an explicit
-        // operator override; they must not be silently disabled by the null
-        // heuristic. If any forced paths are present, bypass the null gate and
-        // continue. Total non-null row count for sparsity arithmetic is recomputed
-        // from column sizes minus null counts (best-effort; the auto branch simply
-        // won't pass anyway when null is dominant, which is fine).
+        // null_factor is a heuristic for the AUTO sparsity-based decision. User-specified
+        // paths are an explicit override and must bypass it; recompute non-null rows so
+        // downstream sparsity arithmetic still has a meaningful denominator.
         if (_column_paths.empty()) {
             return;
         }
@@ -796,10 +792,7 @@ void JsonPathDeriver::_finalize() {
         }
     }
 
-    // Apply _column_paths_max quota to force leaves.
-    // Truncation follows user-specified order (left-to-right), not hits, so the user
-    // controls which paths survive when column_paths_max < len(column_paths).
-    // 0 means "use all specified paths" (no artificial cap).
+    // Apply _column_paths_max quota to forced leaves; 0 = unlimited.
     size_t force_limit = (_column_paths_max > 0)
                                  ? static_cast<size_t>(_column_paths_max)
                                  : std::numeric_limits<size_t>::max();
