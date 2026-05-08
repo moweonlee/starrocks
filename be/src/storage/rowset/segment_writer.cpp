@@ -218,10 +218,8 @@ Status SegmentWriter::init(const std::vector<uint32_t>& column_indexes, bool has
         }
         if (column.type() == LogicalType::TYPE_JSON) {
             // field_name must be set for ALL JSON columns (load AND compaction) so that
-            // JsonPathDeriver::init_flat_json_config can look up per-column forced paths
-            // (flat_json.column_paths.<col>). Previously this was nested inside the
-            // global_dicts check, leaving field_name="" during compaction (where
-            // global_dicts is null) and silently disabling forced flatten on merge.
+            // JsonPathDeriver::init_flat_json_config can look up per-column user-specified
+            // paths (flat_json.column_paths.<col>).
             opts.field_name = column.name();
             if (_opts.global_dicts != nullptr) {
                 std::string_view col_name = column.name();

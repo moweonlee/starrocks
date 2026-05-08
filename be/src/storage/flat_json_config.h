@@ -27,12 +27,11 @@
 namespace starrocks {
 class FlatJsonConfig {
 public:
-    // Default max force-path columns per JSON column.
-    // 0 means "use all specified paths" (bounded only by the system column limit).
+    // Default cap on forced-flatten paths per JSON column.
+    // 0 means use all specified paths (bounded only by the system column limit).
     static constexpr int DEFAULT_COLUMN_PATHS_MAX = 100;
 
-    // Ordered vector preserves the user-specified path order so truncation is left-to-right,
-    // not hits-based.
+    // Ordered vector preserves the user-specified path order so truncation is left-to-right.
     using ColumnPathsMap = std::unordered_map<std::string, std::vector<std::string>>;
 
     // Constructor
