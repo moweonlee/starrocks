@@ -1783,4 +1783,86 @@ TEST_F(FlatJsonColumnCompactTest, testHyperJsonCompactRemainLevelWithConfig) {
     EXPECT_EQ(R"({"a": 28, "b": "efg8", "c": {"d": 38, "e": 381}, "f4": {"m": 548, "n": 248}})",
               read_col->debug_item(18));
 }
+
+// ============================================================================
+// flat_json.column_paths.<col> applied during compaction (ITEM 12 regression)
+//
+// Background: segment_writer.cpp previously left ColumnWriterOptions::field_name
+// empty in the compaction path because the assignment was nested inside a dict
+// branch that does not run when global_dicts is null. JsonPathDeriver then
+// skipped the per-column lookup (empty column name) so forced paths never
+// propagated into the compacted segment.
+//
+// These tests pin down the contract that, once field_name is supplied, the
+// compaction writer columnizes configured forced paths even when sparsity
+// would otherwise prune them.
+// ============================================================================
+
+// Forced sparse path must survive compaction with is_compaction=true.
+TEST_F(FlatJsonColumnCompactTest, testForcedColumnPathsCompactionPromotion) {
+    // clang-format off
+    MutableColumns jsons = to_mutable_columns({
+            normal_json(R"({"a": 1, "b": 21, "rare": 99})", false),
+            normal_json(R"({"a": 2, "b": 22})",             false),
+            normal_json(R"({"a": 3, "b": 23})",             false),
+            normal_json(R"({"a": 4, "b": 24})",             false),
+            normal_json(R"({"a": 5, "b": 25})",             false),
+    });
+    // clang-format on
+
+    MutableColumnPtr read_col = jsons[0]->clone_empty();
+    ColumnWriterOptions writer_opts;
+    FlatJsonConfig config;
+    config.set_column_paths("j1", {"rare"});
+    writer_opts.field_name = "j1";
+    writer_opts.flat_json_config = &config;
+    writer_opts.need_flat = true;
+    test_json(writer_opts, jsons, read_col, nullptr);
+
+    // Forced sub-column must be present in the compacted segment metadata
+    // even though "rare" hits 1/5 and is below the auto sparsity factor.
+    bool rare_columnized = false;
+    for (int i = 0; i < _meta->children_columns_size(); ++i) {
+        if (_meta->children_columns(i).name() == "rare") {
+            rare_columnized = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(rare_columnized) << "Forced path 'rare' must be columnized after compaction";
+    EXPECT_TRUE(_meta->json_meta().is_flat());
+
+    auto* read_json = get_json_column(read_col);
+    EXPECT_EQ(5, read_json->size());
+    EXPECT_EQ(R"({"a": 1, "b": 21, "rare": 99})", read_col->debug_item(0));
+    EXPECT_EQ(R"({"a": 5, "b": 25})", read_col->debug_item(4));
+}
+
+// Empty field_name must NOT match forced paths configured for any column.
+// Guards against regressions where init_flat_json_config picks up the wrong
+// scope when the writer fails to supply the column identity.
+TEST_F(FlatJsonColumnCompactTest, testForcedColumnPathsCompactionEmptyFieldNameNoLeak) {
+    // clang-format off
+    MutableColumns jsons = to_mutable_columns({
+            normal_json(R"({"a": 1, "b": 21, "rare": 99})", false),
+            normal_json(R"({"a": 2, "b": 22})",             false),
+            normal_json(R"({"a": 3, "b": 23})",             false),
+            normal_json(R"({"a": 4, "b": 24})",             false),
+            normal_json(R"({"a": 5, "b": 25})",             false),
+    });
+    // clang-format on
+
+    MutableColumnPtr read_col = jsons[0]->clone_empty();
+    ColumnWriterOptions writer_opts;
+    FlatJsonConfig config;
+    config.set_column_paths("j1", {"rare"});
+    // Intentionally leave writer_opts.field_name empty.
+    writer_opts.flat_json_config = &config;
+    writer_opts.need_flat = true;
+    test_json(writer_opts, jsons, read_col, nullptr);
+
+    for (int i = 0; i < _meta->children_columns_size(); ++i) {
+        EXPECT_NE("rare", _meta->children_columns(i).name());
+    }
+}
+
 } // namespace starrocks
