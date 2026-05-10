@@ -325,6 +325,7 @@
         "json_flat_null_factor",
         "json_flat_sparsity_factor",
         "json_flat_column_max",
+        "flat_json_column_paths_max",
         "json_flat_remain_filter_max_bytes"
       ]
     },
