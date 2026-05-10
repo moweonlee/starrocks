@@ -1,0 +1,172 @@
+-- name: test_flat_json_column_paths
+-- Test case for `flat_json.column_paths.<col>` and `flat_json.column_paths_max`.
+-- Verifies CREATE TABLE / ALTER property handling, per-column scope,
+-- column_paths_max cap, and FE validator rejection on disabled tables.
+
+-- ============================================================
+-- TC1: CREATE TABLE with column_paths configured
+-- ============================================================
+CREATE TABLE `tcp_basic` (
+  `id` bigint(20) NOT NULL,
+  `j1` json NULL
+) ENGINE=OLAP
+DUPLICATE KEY(`id`)
+DISTRIBUTED BY HASH(`id`) BUCKETS 1
+PROPERTIES (
+"replication_num" = "1",
+"flat_json.enable" = "true",
+"flat_json.column_paths.j1" = "k1,k2,k3"
+);
+
+INSERT INTO tcp_basic VALUES
+(1, parse_json('{"k1": "v1", "k2": "v2", "k3": 1.5, "extra": "x"}')),
+(2, parse_json('{"k1": "v3", "k2": "v4", "k3": 2.5}')),
+(3, parse_json('{"k1": "v1", "k2": "v2"}'));
+
+SELECT id, get_json_string(j1, '$.k1'), get_json_string(j1, '$.k2')
+  FROM tcp_basic ORDER BY id;
+SELECT COUNT(*) FROM tcp_basic;
+
+-- ============================================================
+-- TC2: column_paths_max cap (left-to-right truncation)
+-- 5 paths configured + cap=3 → only the first 3 should be forced
+-- ============================================================
+CREATE TABLE `tcp_cap` (
+  `id` bigint(20) NOT NULL,
+  `j1` json NULL
+) ENGINE=OLAP
+DUPLICATE KEY(`id`)
+DISTRIBUTED BY HASH(`id`) BUCKETS 1
+PROPERTIES (
+"replication_num" = "1",
+"flat_json.enable" = "true",
+"flat_json.column_paths.j1" = "p1,p2,p3,p4,p5",
+"flat_json.column_paths_max" = "3"
+);
+
+INSERT INTO tcp_cap VALUES
+(1, parse_json('{"p1": 1, "p2": 2, "p3": 3, "p4": 4, "p5": 5}')),
+(2, parse_json('{"p1": 10, "p2": 20, "p3": 30, "p4": 40, "p5": 50}'));
+
+SELECT id, get_json_int(j1, '$.p1'), get_json_int(j1, '$.p5') FROM tcp_cap ORDER BY id;
+
+-- ============================================================
+-- TC3: enable=false rejects column_paths set
+-- ============================================================
+CREATE TABLE `tcp_off_reject` (
+  `id` bigint(20) NOT NULL,
+  `j1` json NULL
+) ENGINE=OLAP
+DUPLICATE KEY(`id`)
+DISTRIBUTED BY HASH(`id`) BUCKETS 1
+PROPERTIES (
+"replication_num" = "1",
+"flat_json.enable" = "false",
+"flat_json.column_paths.j1" = "k1"
+);
+
+-- ============================================================
+-- TC4: ALTER `.add` to extend forced paths on a flat-enabled table
+-- ============================================================
+CREATE TABLE `tcp_alter_add` (
+  `id` bigint(20) NOT NULL,
+  `j1` json NULL
+) ENGINE=OLAP
+DUPLICATE KEY(`id`)
+DISTRIBUTED BY HASH(`id`) BUCKETS 1
+PROPERTIES (
+"replication_num" = "1",
+"flat_json.enable" = "true",
+"flat_json.column_paths.j1" = "k1"
+);
+
+ALTER TABLE tcp_alter_add SET ("flat_json.column_paths.j1.add" = "k2,k3");
+
+INSERT INTO tcp_alter_add VALUES
+(1, parse_json('{"k1": "v1", "k2": "v2", "k3": 1.5}')),
+(2, parse_json('{"k1": "v3", "k2": "v4", "k3": 2.5}'));
+
+SELECT id, get_json_string(j1, '$.k1'), get_json_string(j1, '$.k2'),
+       get_json_double(j1, '$.k3')
+  FROM tcp_alter_add ORDER BY id;
+
+-- ============================================================
+-- TC5: ALTER `.remove` to drop forced paths
+-- ============================================================
+CREATE TABLE `tcp_alter_remove` (
+  `id` bigint(20) NOT NULL,
+  `j1` json NULL
+) ENGINE=OLAP
+DUPLICATE KEY(`id`)
+DISTRIBUTED BY HASH(`id`) BUCKETS 1
+PROPERTIES (
+"replication_num" = "1",
+"flat_json.enable" = "true",
+"flat_json.column_paths.j1" = "k1,k2,k3"
+);
+
+ALTER TABLE tcp_alter_remove SET ("flat_json.column_paths.j1.remove" = "k2");
+
+INSERT INTO tcp_alter_remove VALUES
+(1, parse_json('{"k1": "v1", "k2": "v2", "k3": 1.5}'));
+
+SELECT id, get_json_string(j1, '$.k1'), get_json_string(j1, '$.k2')
+  FROM tcp_alter_remove ORDER BY id;
+
+-- ============================================================
+-- TC6: ALTER rejects column_paths set on enable=false table
+-- ============================================================
+CREATE TABLE `tcp_off_alter_reject` (
+  `id` bigint(20) NOT NULL,
+  `j1` json NULL
+) ENGINE=OLAP
+DUPLICATE KEY(`id`)
+DISTRIBUTED BY HASH(`id`) BUCKETS 1
+PROPERTIES (
+"replication_num" = "1",
+"flat_json.enable" = "false"
+);
+
+ALTER TABLE tcp_off_alter_reject SET ("flat_json.column_paths.j1" = "k1");
+ALTER TABLE tcp_off_alter_reject SET ("flat_json.column_paths_max" = "5");
+
+-- ============================================================
+-- TC7: Per-column scope — paths configured for `j1` must NOT
+-- affect `j2`. Only `j1.k1` is forced.
+-- ============================================================
+CREATE TABLE `tcp_per_col` (
+  `id` bigint(20) NOT NULL,
+  `j1` json NULL,
+  `j2` json NULL
+) ENGINE=OLAP
+DUPLICATE KEY(`id`)
+DISTRIBUTED BY HASH(`id`) BUCKETS 1
+PROPERTIES (
+"replication_num" = "1",
+"flat_json.enable" = "true",
+"flat_json.column_paths.j1" = "k1"
+);
+
+INSERT INTO tcp_per_col VALUES
+(1, parse_json('{"k1": "v1"}'), parse_json('{"k1": "v2"}'));
+
+SELECT id,
+       get_json_string(j1, '$.k1'),
+       get_json_string(j2, '$.k1')
+  FROM tcp_per_col ORDER BY id;
+
+-- ============================================================
+-- TC8: column_paths references a non-JSON column → rejected
+-- ============================================================
+CREATE TABLE `tcp_non_json_reject` (
+  `id` bigint(20) NOT NULL,
+  `name` varchar(64) NULL,
+  `j1` json NULL
+) ENGINE=OLAP
+DUPLICATE KEY(`id`)
+DISTRIBUTED BY HASH(`id`) BUCKETS 1
+PROPERTIES (
+"replication_num" = "1",
+"flat_json.enable" = "true",
+"flat_json.column_paths.name" = "k1"
+);

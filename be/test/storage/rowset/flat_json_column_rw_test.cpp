@@ -2745,4 +2745,152 @@ TEST_F(FlatJsonColumnRWTest, test_json_global_dict) {
     ASSERT_OK(fs->delete_file(file_name + "_complex_types"));
 }
 
+// ============================================================================
+// flat_json.column_paths.<col> (force-flatten) read/write tests
+// ============================================================================
+
+// Force-flatten a sparse path that would otherwise be pruned by sparsity factor.
+// With sparsity_factor = 0.9, "rare" appears in only 1/5 rows (0.2) and would be
+// pruned. column_paths configures it as forced, so it must show up as a child.
+TEST_F(FlatJsonColumnRWTest, testForcedColumnPathsSparsePromotion) {
+    MutableColumnPtr write_col = JsonColumn::create();
+    auto* json_col = down_cast<JsonColumn*>(write_col.get());
+
+    ASSIGN_OR_ABORT(auto jv1, JsonValue::parse(R"({"a": 1, "b": 21, "rare": 99})"));
+    ASSIGN_OR_ABORT(auto jv2, JsonValue::parse(R"({"a": 2, "b": 22})"));
+    ASSIGN_OR_ABORT(auto jv3, JsonValue::parse(R"({"a": 3, "b": 23})"));
+    ASSIGN_OR_ABORT(auto jv4, JsonValue::parse(R"({"a": 4, "b": 24})"));
+    ASSIGN_OR_ABORT(auto jv5, JsonValue::parse(R"({"a": 5, "b": 25})"));
+
+    json_col->append(&jv1);
+    json_col->append(&jv2);
+    json_col->append(&jv3);
+    json_col->append(&jv4);
+    json_col->append(&jv5);
+
+    MutableColumnPtr read_col = JsonColumn::create();
+    ColumnWriterOptions writer_opts;
+    FlatJsonConfig config;
+    config.set_column_paths("j1", {"rare"});
+    writer_opts.field_name = "j1";
+    writer_opts.flat_json_config = &config;
+    writer_opts.need_flat = true;
+    test_json(writer_opts, "/test_flat_json_force_sparse.data", write_col, read_col, nullptr);
+
+    // Sub-column for "rare" must appear in segment children even though
+    // sparsity (1/5 = 0.2) is below the 0.9 factor.
+    bool rare_columnized = false;
+    for (int i = 0; i < writer_opts.meta->children_columns_size(); ++i) {
+        if (writer_opts.meta->children_columns(i).name() == "rare") {
+            rare_columnized = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(rare_columnized) << "Forced path 'rare' must be columnized despite low sparsity";
+    EXPECT_TRUE(writer_opts.meta->json_meta().is_flat());
+
+    // Round-trip read returns full JSON intact.
+    auto* read_json = down_cast<JsonColumn*>(read_col.get());
+    EXPECT_FALSE(read_json->is_flat_json());
+    EXPECT_EQ(5, read_col->size());
+    EXPECT_EQ(R"({"a": 1, "b": 21, "rare": 99})", read_col->debug_item(0));
+    EXPECT_EQ(R"({"a": 5, "b": 25})", read_col->debug_item(4));
+}
+
+// Forced path absent from data must not be columnized (hits=0 short-circuit).
+TEST_F(FlatJsonColumnRWTest, testForcedColumnPathsNotInDataIsExcluded) {
+    MutableColumnPtr write_col = JsonColumn::create();
+    auto* json_col = down_cast<JsonColumn*>(write_col.get());
+
+    ASSIGN_OR_ABORT(auto jv1, JsonValue::parse(R"({"a": 1, "b": 21})"));
+    ASSIGN_OR_ABORT(auto jv2, JsonValue::parse(R"({"a": 2, "b": 22})"));
+    ASSIGN_OR_ABORT(auto jv3, JsonValue::parse(R"({"a": 3, "b": 23})"));
+
+    json_col->append(&jv1);
+    json_col->append(&jv2);
+    json_col->append(&jv3);
+
+    MutableColumnPtr read_col = JsonColumn::create();
+    ColumnWriterOptions writer_opts;
+    FlatJsonConfig config;
+    config.set_column_paths("j1", {"missing_path"});
+    writer_opts.field_name = "j1";
+    writer_opts.flat_json_config = &config;
+    writer_opts.need_flat = true;
+    test_json(writer_opts, "/test_flat_json_force_missing.data", write_col, read_col, nullptr);
+
+    for (int i = 0; i < writer_opts.meta->children_columns_size(); ++i) {
+        EXPECT_NE("missing_path", writer_opts.meta->children_columns(i).name());
+    }
+}
+
+// column_paths_max caps the number of forced paths at write time.
+// Configure 3 forced paths but cap at 1 — only the leftmost survives.
+TEST_F(FlatJsonColumnRWTest, testForcedColumnPathsMaxCap) {
+    MutableColumnPtr write_col = JsonColumn::create();
+    auto* json_col = down_cast<JsonColumn*>(write_col.get());
+
+    ASSIGN_OR_ABORT(auto jv1, JsonValue::parse(R"({"k1": 1, "k2": 2, "k3": 3})"));
+    ASSIGN_OR_ABORT(auto jv2, JsonValue::parse(R"({"k1": 4, "k2": 5, "k3": 6})"));
+    ASSIGN_OR_ABORT(auto jv3, JsonValue::parse(R"({"k1": 7, "k2": 8, "k3": 9})"));
+
+    json_col->append(&jv1);
+    json_col->append(&jv2);
+    json_col->append(&jv3);
+
+    MutableColumnPtr read_col = JsonColumn::create();
+    ColumnWriterOptions writer_opts;
+    FlatJsonConfig config;
+    config.set_column_paths("j1", {"k1", "k2", "k3"});
+    config.set_column_paths_max(1);
+    // Force sparsity high so non-forced paths cannot squeeze in via auto-pickup.
+    config.set_flat_json_sparsity_factor(0.99);
+    writer_opts.field_name = "j1";
+    writer_opts.flat_json_config = &config;
+    writer_opts.need_flat = true;
+    test_json(writer_opts, "/test_flat_json_force_cap.data", write_col, read_col, nullptr);
+
+    size_t forced_present = 0;
+    for (int i = 0; i < writer_opts.meta->children_columns_size(); ++i) {
+        const auto& nm = writer_opts.meta->children_columns(i).name();
+        if (nm == "k1" || nm == "k2" || nm == "k3") {
+            forced_present++;
+        }
+    }
+    EXPECT_LE(forced_present, 1u) << "column_paths_max=1 must cap forced sub-columns at 1";
+}
+
+// Per-column scope: paths configured for "other" must not leak when writing column "j1".
+// ColumnWriterOptions.field_name supplies the column identity used for the lookup.
+TEST_F(FlatJsonColumnRWTest, testForcedColumnPathsPerColumnScope) {
+    MutableColumnPtr write_col = JsonColumn::create();
+    auto* json_col = down_cast<JsonColumn*>(write_col.get());
+
+    ASSIGN_OR_ABORT(auto jv1, JsonValue::parse(R"({"k1": 1, "rare": 99})"));
+    ASSIGN_OR_ABORT(auto jv2, JsonValue::parse(R"({"k1": 2})"));
+    ASSIGN_OR_ABORT(auto jv3, JsonValue::parse(R"({"k1": 3})"));
+    ASSIGN_OR_ABORT(auto jv4, JsonValue::parse(R"({"k1": 4})"));
+    ASSIGN_OR_ABORT(auto jv5, JsonValue::parse(R"({"k1": 5})"));
+
+    json_col->append(&jv1);
+    json_col->append(&jv2);
+    json_col->append(&jv3);
+    json_col->append(&jv4);
+    json_col->append(&jv5);
+
+    MutableColumnPtr read_col = JsonColumn::create();
+    ColumnWriterOptions writer_opts;
+    FlatJsonConfig config;
+    config.set_column_paths("other", {"rare"});  // forced for a different column
+    writer_opts.field_name = "j1";
+    writer_opts.flat_json_config = &config;
+    writer_opts.need_flat = true;
+    test_json(writer_opts, "/test_flat_json_force_scope.data", write_col, read_col, nullptr);
+
+    // "rare" is sparse and not scoped to "j1" -> must NOT appear as a child.
+    for (int i = 0; i < writer_opts.meta->children_columns_size(); ++i) {
+        EXPECT_NE("rare", writer_opts.meta->children_columns(i).name());
+    }
+}
+
 } // namespace starrocks
