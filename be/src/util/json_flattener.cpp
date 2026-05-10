@@ -400,7 +400,7 @@ void JsonPathDeriver::init_flat_json_config(const FlatJsonConfig* flat_json_conf
         if (!column_name.empty()) {
             // Load only the paths targeted at this specific JSON column.
             if (const auto* paths = flat_json_config->get_column_paths_for(column_name); paths != nullptr) {
-                _column_paths = *paths;
+                _column_paths.insert(paths->begin(), paths->end());
             }
         }
         _column_paths_max = flat_json_config->get_column_paths_max();
@@ -408,6 +408,7 @@ void JsonPathDeriver::init_flat_json_config(const FlatJsonConfig* flat_json_conf
         _max_json_null_factor = config::json_flat_null_factor;
         _min_json_sparsity_factory = config::json_flat_sparsity_factor;
         _max_column = config::json_flat_column_max;
+        _column_paths_max = config::flat_json_column_paths_max;
     }
 }
 
@@ -423,9 +424,25 @@ void JsonPathDeriver::derived(const std::vector<const Column*>& json_datas) {
 
     auto res = check_null_factor(json_datas);
     if (!res.ok()) {
-        return;
+        // null_factor is a heuristic for the AUTO sparsity-based decision. User-specified
+        // paths are an explicit override and must bypass it; recompute non-null rows so
+        // downstream sparsity arithmetic still has a meaningful denominator.
+        if (_column_paths.empty()) {
+            return;
+        }
+        size_t total = 0, nulls = 0;
+        for (const auto& col : json_datas) {
+            total += col->size();
+            if (col->only_null() || col->empty()) {
+                nulls += col->size();
+            } else if (col->is_nullable()) {
+                nulls += down_cast<const NullableColumn*>(col)->null_count();
+            }
+        }
+        _total_rows = total - nulls;
+    } else {
+        _total_rows = res.value();
     }
-    _total_rows = res.value();
 
     _path_root = std::make_shared<JsonFlatPath>();
     // Pre-mark force paths so _clean_sparsity_path never prunes them.
@@ -775,9 +792,7 @@ void JsonPathDeriver::_finalize() {
         }
     }
 
-    // Apply _column_paths_max quota to force leaves (sort by hits desc for determinism).
-    std::sort(forced_leaves.begin(), forced_leaves.end(),
-              [](const auto& a, const auto& b) { return a.first->hits > b.first->hits; });
+    // Apply _column_paths_max quota to forced leaves; 0 = unlimited.
     size_t force_limit = (_column_paths_max > 0)
                                  ? static_cast<size_t>(_column_paths_max)
                                  : std::numeric_limits<size_t>::max();

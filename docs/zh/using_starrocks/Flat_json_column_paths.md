@@ -44,7 +44,10 @@ flat_json.column_paths_max                      = <정수>                     (
 - 예약 접미사 `.add`, `.remove`는 `ALTER TABLE ... SET (...)`에서만 유효합니다
   (`CREATE TABLE`에서는 사용할 수 없음).
 - `flat_json.column_paths_max`는 **JSON 컬럼당** 강제 평탄화 컬럼의 상한입니다
-  (`flat_json.column.max`는 희소성 기반 컬럼 상한과 별개). 기본값은 `200`.
+  (`flat_json.column.max`는 희소성 기반 컬럼 상한과 별개). 기본값은 `100`.
+  상한이 지정된 경로 수보다 작으면 **사용자 지정 순서 기준 앞에서 N개**만 유지됩니다
+  (hit율 기반 정렬 없음, 좌→우 순서). `0`으로 설정하면 지정한 모든 경로를 사용합니다
+  (시스템 컬럼 수 제한에만 영향받음).
 
 ## 전제 조건
 
@@ -73,7 +76,7 @@ PROPERTIES (
     "flat_json.column.max"              = "50",
     -- events.browser, events.utm_source을 희소성 무시하고 강제 평탄화
     "flat_json.column_paths.events"     = "$.browser, $.utm_source",
-    -- 강제 경로의 컬럼별 상한 (선택; 기본 200)
+    -- 강제 경로의 컬럼별 상한 (선택; 기본 100)
     "flat_json.column_paths_max"        = "20"
 );
 ```
@@ -142,7 +145,7 @@ ALTER TABLE user_events SET (
 ALTER TABLE user_events SET ("flat_json.column_paths_max" = "50");
 ```
 
-`0`으로 설정하면 서버 기본값(`200`)으로 복원됩니다.
+`0`으로 설정하면 지정한 모든 경로를 사용합니다 (시스템 컬럼 수 제한에만 영향받음).
 
 ### 조합 예시
 
@@ -277,7 +280,7 @@ Compaction flat json column: nulls(TINYINT),browser(VARCHAR),session(VARCHAR)
 | `flat JSON configuration must be set after enabling flat JSON.` | Flat JSON이 비활성 상태에서 `column_paths` 설정 시도.                  | 먼저 `ALTER TABLE t SET ("flat_json.enable" = "true");`.                   |
 | `flat_json_meta`에 설정한 경로가 안 보임                      | 아직 해당 경로가 어느 행에도 등장하지 않음 (`hits = 0`).                | 해당 경로를 포함한 데이터를 적재하거나 등장할 때까지 대기.                 |
 | 서브컬럼은 존재하지만 `AccessPathHits = 0`                    | 쿼리가 설정 변경 이전의 기존 rowset을 읽고 있음.                       | `ALTER TABLE t COMPACT;`로 재평탄화.                                       |
-| 지정한 경로 수가 쿼터 초과                                    | 해당 JSON 컬럼에 대해 `flat_json.column_paths_max`에 도달.              | 상한을 올리거나 `.remove`로 경로를 줄임.                                   |
+| 지정한 경로 수가 쿼터 초과                                    | 해당 JSON 컬럼에 대해 `flat_json.column_paths_max`에 도달 (기본 100).   | 상한을 올리거나 0(무제한)으로 설정, 또는 `.remove`로 경로를 줄임.          |
 | Remove 후 follower FE의 상태가 이상함                         | 초기 버전의 emit-only-if-non-empty 버그.                                | 본 설계에서는 항상 전체 상태를 emit하여 수정됨.                            |
 
 ## 메타데이터와 클러스터 전체 일관성

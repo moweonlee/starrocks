@@ -27,10 +27,12 @@
 namespace starrocks {
 class FlatJsonConfig {
 public:
-    // Default max force-path columns (per JSON column) when not specified by the caller.
-    static constexpr int DEFAULT_COLUMN_PATHS_MAX = 200;
+    // Default cap on forced-flatten paths per JSON column.
+    // 0 means use all specified paths (bounded only by the system column limit).
+    static constexpr int DEFAULT_COLUMN_PATHS_MAX = 100;
 
-    using ColumnPathsMap = std::unordered_map<std::string, std::unordered_set<std::string>>;
+    // Ordered vector preserves the user-specified path order so truncation is left-to-right.
+    using ColumnPathsMap = std::unordered_map<std::string, std::vector<std::string>>;
 
     // Constructor
     FlatJsonConfig();
@@ -59,8 +61,8 @@ public:
     // Per-JSON-column force-flatten paths (dot-separated, no leading "$.").
     const ColumnPathsMap& get_column_paths_map() const { return _flat_json_column_paths; }
 
-    // Returns the path set for the given JSON column, or nullptr if the column has no forced paths.
-    const std::unordered_set<std::string>* get_column_paths_for(const std::string& column_name) const {
+    // Returns the ordered path list for the given JSON column, or nullptr if absent.
+    const std::vector<std::string>* get_column_paths_for(const std::string& column_name) const {
         auto it = _flat_json_column_paths.find(column_name);
         return it == _flat_json_column_paths.end() ? nullptr : &it->second;
     }
@@ -68,11 +70,7 @@ public:
     void set_column_paths_map(ColumnPathsMap paths) { _flat_json_column_paths = std::move(paths); }
 
     void set_column_paths(const std::string& column_name, const std::vector<std::string>& paths) {
-        std::unordered_set<std::string> s;
-        for (const auto& p : paths) {
-            s.insert(p);
-        }
-        _flat_json_column_paths[column_name] = std::move(s);
+        _flat_json_column_paths[column_name] = paths;
     }
 
     int get_column_paths_max() const { return _flat_json_column_paths_max; }
@@ -112,11 +110,10 @@ public:
         _flat_json_column_paths.clear();
         if (config.__isset.flat_json_column_paths) {
             for (const auto& [col, paths] : config.flat_json_column_paths) {
-                std::unordered_set<std::string> s(paths.begin(), paths.end());
-                _flat_json_column_paths.emplace(col, std::move(s));
+                _flat_json_column_paths.emplace(col, std::vector<std::string>(paths.begin(), paths.end()));
             }
         }
-        if (config.__isset.flat_json_column_paths_max && config.flat_json_column_paths_max > 0) {
+        if (config.__isset.flat_json_column_paths_max) {
             _flat_json_column_paths_max = static_cast<int>(config.flat_json_column_paths_max);
         }
     }
@@ -128,14 +125,10 @@ public:
         _flat_json_max_column_max = flat_json_config_pb.flat_json_max_column_max();
         _flat_json_column_paths.clear();
         for (const auto& entry : flat_json_config_pb.flat_json_column_paths()) {
-            std::unordered_set<std::string> s;
-            for (const auto& p : entry.paths()) {
-                s.insert(p);
-            }
-            _flat_json_column_paths.emplace(entry.column_name(), std::move(s));
+            std::vector<std::string> v(entry.paths().begin(), entry.paths().end());
+            _flat_json_column_paths.emplace(entry.column_name(), std::move(v));
         }
-        if (flat_json_config_pb.has_flat_json_column_paths_max() &&
-            flat_json_config_pb.flat_json_column_paths_max() > 0) {
+        if (flat_json_config_pb.has_flat_json_column_paths_max()) {
             _flat_json_column_paths_max = static_cast<int>(flat_json_config_pb.flat_json_column_paths_max());
         }
     }
