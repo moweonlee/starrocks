@@ -204,10 +204,10 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
         return null;
     }
 
-    // Validates flat_json.column_paths.* (and column_paths_max) keys in the given properties map
-    // against the table's JSON columns.  Throws SemanticException on any violation.
-    // Called from both the flat_json.enable branch and the dedicated column_paths branch so that
-    // bundling enable + column_paths in a single ALTER TABLE does not bypass validation.
+    // Validates flat_json.column_paths.<col> keys in the given properties map against the table's
+    // JSON columns.  Throws SemanticException on any violation.  Called from both the
+    // flat_json.enable branch and the dedicated column_paths branch so that bundling enable +
+    // column_paths in a single ALTER TABLE does not bypass validation.
     private void validateFlatJsonColumnPathsProperties(Map<String, String> properties, OlapTable olapTable) {
         java.util.Set<String> jsonColumnNames = new java.util.HashSet<>();
         for (Column col : olapTable.getBaseSchema()) {
@@ -219,17 +219,7 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
             if (!key.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)) {
                 continue;
             }
-            String suffix = key.substring(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX.length());
-            String columnName;
-            if (suffix.endsWith("." + PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD)) {
-                columnName = suffix.substring(0,
-                        suffix.length() - PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD.length() - 1);
-            } else if (suffix.endsWith("." + PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE)) {
-                columnName = suffix.substring(0,
-                        suffix.length() - PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE.length() - 1);
-            } else {
-                columnName = suffix;
-            }
+            String columnName = key.substring(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX.length());
             if (columnName.isEmpty()) {
                 ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
                         "Invalid property key '" + key + "': missing JSON column name");
@@ -240,9 +230,6 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
             }
             PropertyAnalyzer.analyzeFlatJsonColumnPaths(
                     java.util.Collections.singletonMap(key, properties.get(key)));
-        }
-        if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX)) {
-            PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties);
         }
     }
 
@@ -480,9 +467,7 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
             // When column_paths properties are bundled in the same ALTER, validate them here.
             // The else-if chain would otherwise skip column_paths validation entirely when
             // flat_json.enable is also present.
-            if (table instanceof OlapTable &&
-                    (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX) ||
-                            PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties))) {
+            if (table instanceof OlapTable && PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties)) {
                 if (!"true".equalsIgnoreCase(properties.get(PropertyAnalyzer.PROPERTIES_FLAT_JSON_ENABLE))) {
                     ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
                             "flat_json.column_paths can only be set when " +
@@ -509,8 +494,7 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
                                     " haven't been enabled");
                 }
             }
-        } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX) ||
-                PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties)) {
+        } else if (PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties)) {
             if (table instanceof OlapTable) {
                 OlapTable olapTable = (OlapTable) table;
                 if (olapTable.getFlatJsonConfig() == null || !olapTable.getFlatJsonConfig().getFlatJsonEnable()) {

@@ -571,7 +571,6 @@ public class TableProperty implements Writable, GsonPostProcessable {
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX) ||
-                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX) ||
                 PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties)) {
             boolean enableFlatJson = PropertyAnalyzer.analyzeFlatJsonEnabled(properties);
 
@@ -588,15 +587,10 @@ public class TableProperty implements Writable, GsonPostProcessable {
                 flatJsonConfig = new FlatJsonConfig(enableFlatJson, flatJsonNullFactor,
                         flatJsonSparsityFactory, flatJsonColumnMax);
                 // Per-column force paths. analyzeFlatJsonColumnPaths only picks up full-replace
-                // keys (flat_json.column_paths.<col>); .add/.remove are incremental ops handled
-                // by SchemaChangeHandler before reaching this path.
+                // keys (flat_json.column_paths.<col>).
                 Map<String, List<String>> perCol = PropertyAnalyzer.analyzeFlatJsonColumnPaths(properties);
                 if (!perCol.isEmpty()) {
                     flatJsonConfig.setFlatJsonColumnPaths(perCol);
-                }
-                int columnPathsMax = PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties);
-                if (columnPathsMax >= 0) {
-                    flatJsonConfig.setFlatJsonColumnPathsMax(columnPathsMax);
                 }
             } catch (AnalysisException e) {
                 throw new RuntimeException("Failed to analyze flat JSON properties: " + e.getMessage(), e);

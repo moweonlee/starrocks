@@ -573,7 +573,6 @@ public class AlterJobExecutor implements AstVisitorExtendInterface<Void, Connect
                     properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                     properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
                     properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX) ||
-                    properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX) ||
                     PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties)) {
                 boolean isSuccess = schemaChangeHandler.updateFlatJsonConfigMeta(db, table.getId(),
                         properties, TTabletMetaType.FLAT_JSON_CONFIG);

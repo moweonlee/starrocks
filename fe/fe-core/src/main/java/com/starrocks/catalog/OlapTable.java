@@ -3209,12 +3209,6 @@ public class OlapTable extends Table {
                     }
                 }
 
-                // flat json force paths global max
-                String flatJsonColumnPathsMax =
-                        tableProperties.get(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX);
-                if (!Strings.isNullOrEmpty(flatJsonColumnPathsMax)) {
-                    properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX, flatJsonColumnPathsMax);
-                }
             }
         }
 

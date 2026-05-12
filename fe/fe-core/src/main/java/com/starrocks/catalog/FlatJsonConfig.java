@@ -46,19 +46,12 @@ public class FlatJsonConfig implements Writable {
     @SerializedName("flatJsonColumnPaths")
     private Map<String, List<String>> flatJsonColumnPaths;
 
-    // Per-column cap on user-specified column paths.
-    // 0 = use all specified paths (bounded only by the system column limit). Default: 100.
-    // When cap < path count, the first N paths in user-specified order are kept.
-    @SerializedName("flatJsonColumnPathsMax")
-    private int flatJsonColumnPathsMax;
-
     public FlatJsonConfig(boolean enabled, double nullFactor, double sparsityFactor, int columnMax) {
         this.flatJsonEnable = enabled;
         this.flatJsonNullFactor = nullFactor;
         this.flatJsonSparsityFactor = sparsityFactor;
         this.flatJsonColumnMax = columnMax;
         this.flatJsonColumnPaths = new LinkedHashMap<>();
-        this.flatJsonColumnPathsMax = 0;
     }
 
     public FlatJsonConfig(FlatJsonConfig config) {
@@ -67,7 +60,6 @@ public class FlatJsonConfig implements Writable {
         this.flatJsonSparsityFactor = config.getFlatJsonSparsityFactor();
         this.flatJsonColumnMax = config.getFlatJsonColumnMax();
         this.flatJsonColumnPaths = deepCopyPaths(config.getFlatJsonColumnPaths());
-        this.flatJsonColumnPathsMax = config.getFlatJsonColumnPathsMax();
     }
 
     public FlatJsonConfig() {
@@ -94,14 +86,9 @@ public class FlatJsonConfig implements Writable {
         }
         // Replace (not merge) per-column paths from the properties map. This is the EditLog
         // replay path on follower FEs: leader emits the full state in toProperties(), so this
-        // must overwrite any stale in-memory entries. Callers that want incremental ops
-        // (.add/.remove) resolve them BEFORE serializing to properties.
+        // must overwrite any stale in-memory entries.
         Map<String, List<String>> perCol = PropertyAnalyzer.analyzeFlatJsonColumnPaths(properties);
         flatJsonColumnPaths = new LinkedHashMap<>(perCol);
-        if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX)) {
-            int max = PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties);
-            flatJsonColumnPathsMax = Math.max(max, 0);
-        }
     }
 
     public boolean getFlatJsonEnable() {
@@ -164,25 +151,13 @@ public class FlatJsonConfig implements Writable {
         }
     }
 
-    public int getFlatJsonColumnPathsMax() {
-        return flatJsonColumnPathsMax;
-    }
-
-    public void setFlatJsonColumnPathsMax(int max) {
-        this.flatJsonColumnPathsMax = max;
-    }
-
     // Serializes this config back into a flat properties map for EditLog persistence.
     //
     // CRITICAL: the EditLog replay path on follower FEs uses
     // TableProperty.modifyTableProperties(map) which does putAll() (merge, not replace) into
-    // the existing properties map. If we conditionally omit keys for empty/zero values,
-    // followers would retain stale values after a user removes all paths or resets _max to 0,
-    // diverging from the leader's state. To keep leader and followers in sync we:
-    //   1. Always emit the global _max key (so 0 reliably resets it).
-    //   2. Emit one key per surviving column. Keys that previously existed but are now
-    //      absent must be cleared on the follower; SchemaChangeHandler's ALTER path
-    //      explicitly erases stale keys before calling toProperties() (see there for details).
+    // the existing properties map. Keys that previously existed but are now absent must be
+    // cleared on the follower; SchemaChangeHandler's ALTER path explicitly erases stale keys
+    // before calling toProperties() (see there for details).
     public Map<String, String> toProperties() {
         Map<String, String> properties = new HashMap<>();
         properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_ENABLE, String.valueOf(flatJsonEnable));
@@ -191,8 +166,6 @@ public class FlatJsonConfig implements Writable {
             properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR,
                     String.valueOf(flatJsonSparsityFactor));
             properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX, String.valueOf(flatJsonColumnMax));
-            properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX,
-                    String.valueOf(flatJsonColumnPathsMax));
             if (flatJsonColumnPaths != null) {
                 for (Map.Entry<String, List<String>> entry : flatJsonColumnPaths.entrySet()) {
                     String key = PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX + entry.getKey();
@@ -213,8 +186,6 @@ public class FlatJsonConfig implements Writable {
         if (!paths.isEmpty()) {
             tFlatJsonConfig.setFlat_json_column_paths(new TreeMap<>(paths));
         }
-        // Always send column_paths_max so BE sees 0 as "use all specified paths".
-        tFlatJsonConfig.setFlat_json_column_paths_max(flatJsonColumnPathsMax);
         return tFlatJsonConfig;
     }
 
@@ -234,9 +205,8 @@ public class FlatJsonConfig implements Writable {
                 "flat_json_null_factor : %f,\n " +
                 "flat_json_sparsity_factor : %f,\n" +
                 "flat_json_column_max : %d,\n" +
-                "flat_json_column_paths : %s,\n" +
-                "flat_json_column_paths_max : %d }",
+                "flat_json_column_paths : %s }",
                 flatJsonEnable, flatJsonNullFactor, flatJsonSparsityFactor, flatJsonColumnMax,
-                getFlatJsonColumnPaths(), flatJsonColumnPathsMax);
+                getFlatJsonColumnPaths());
     }
 }

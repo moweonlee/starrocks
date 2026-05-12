@@ -759,27 +759,6 @@ TEST_F(JsonPathDeriverForcePathTest, force_mixed_sparse_and_dense) {
     EXPECT_NE(std::find(paths.begin(), paths.end(), "k2.j1"), paths.end());
 }
 
-// FORCE quota: column_paths_max=2 caps 3 force paths → excess goes to remain
-TEST_F(JsonPathDeriverForcePathTest, force_paths_max_quota) {
-    FlatJsonConfig cfg(true, 0.3, 0.0, 100);
-    cfg.set_column_paths(kJsonColName, {"k1", "k2", "k3"});
-    cfg.set_column_paths_max(2);
-
-    auto jf = derive({
-        R"({"k1": 1, "k2": 2, "k3": 3})",
-        R"({"k1": 4, "k2": 5, "k3": 6})",
-        R"({"k1": 7, "k2": 8, "k3": 9})",
-    }, cfg);
-
-    auto paths = jf.flat_paths();
-    size_t force_count = 0;
-    for (const auto& p : {"k1", "k2", "k3"}) {
-        if (std::find(paths.begin(), paths.end(), p) != paths.end()) force_count++;
-    }
-    EXPECT_LE(force_count, 2u);
-    EXPECT_TRUE(jf.has_remain_json());
-}
-
 // Per-column scope: paths configured for a different JSON column must NOT leak
 // into this column. With column "other" forced and column "events" derived,
 // sparse "k2" in "events" should fall back to sparsity rules (pruned here).

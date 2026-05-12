@@ -403,12 +403,10 @@ void JsonPathDeriver::init_flat_json_config(const FlatJsonConfig* flat_json_conf
                 _column_paths.insert(paths->begin(), paths->end());
             }
         }
-        _column_paths_max = flat_json_config->get_column_paths_max();
     } else {
         _max_json_null_factor = config::json_flat_null_factor;
         _min_json_sparsity_factory = config::json_flat_sparsity_factor;
         _max_column = config::json_flat_column_max;
-        _column_paths_max = config::flat_json_column_paths_max;
     }
 }
 
@@ -781,7 +779,10 @@ void JsonPathDeriver::_finalize() {
     std::vector<std::pair<JsonFlatPath*, std::string>> hit_leaf;
     _dfs_finalize(_path_root.get(), "", &hit_leaf);
 
-    // Separate forced leaves from normal leaves so each has its own quota.
+    // Forced paths and auto-derived paths compete for the same _max_column budget.
+    // Forced paths get priority (left-to-right, user-specified order); auto-derived paths
+    // fill any remaining slots. Excess paths from either group are pushed to `remain`
+    // (raw JSON fallback), matching the existing soft-cap behaviour of _max_column.
     std::vector<std::pair<JsonFlatPath*, std::string>> forced_leaves;
     std::vector<std::pair<JsonFlatPath*, std::string>> normal_leaves;
     for (auto& item : hit_leaf) {
@@ -792,32 +793,36 @@ void JsonPathDeriver::_finalize() {
         }
     }
 
-    // Apply _column_paths_max quota to forced leaves; 0 = unlimited.
-    size_t force_limit = (_column_paths_max > 0)
-                                 ? static_cast<size_t>(_column_paths_max)
-                                 : std::numeric_limits<size_t>::max();
-    for (size_t i = force_limit; i < forced_leaves.size(); i++) {
+    size_t budget = _max_column > 0 ? static_cast<size_t>(_max_column) : std::numeric_limits<size_t>::max();
+
+    // Forced first: left-to-right truncation, excess goes to remain.
+    size_t forced_kept = std::min(forced_leaves.size(), budget);
+    for (size_t i = forced_kept; i < forced_leaves.size(); i++) {
         forced_leaves[i].first->remain = true;
         _has_remain = true;
     }
-    if (forced_leaves.size() > force_limit) {
-        forced_leaves.resize(force_limit);
+    if (forced_leaves.size() > forced_kept) {
+        forced_leaves.resize(forced_kept);
     }
 
-    // Apply _max_column quota to normal leaves (existing behaviour).
+    // Auto-derived paths fill remaining slots, sorted by hit count (most frequent first).
+    // 100%-hit paths are preserved beyond the budget (existing safety net).
     std::sort(normal_leaves.begin(), normal_leaves.end(),
               [](const auto& a, const auto& b) { return a.first->hits > b.first->hits; });
-    size_t limit = _max_column > 0 ? static_cast<size_t>(_max_column) : std::numeric_limits<size_t>::max();
-    for (size_t i = limit; i < normal_leaves.size(); i++) {
+    size_t auto_limit = budget > forced_kept ? budget - forced_kept : 0;
+    if (_max_column <= 0) {
+        auto_limit = std::numeric_limits<size_t>::max();
+    }
+    for (size_t i = auto_limit; i < normal_leaves.size(); i++) {
         if (!normal_leaves[i].first->remain && normal_leaves[i].first->hits >= _total_rows) {
-            limit++;
+            auto_limit++;
             continue;
         }
         normal_leaves[i].first->remain = true;
     }
-    if (normal_leaves.size() > limit) {
+    if (normal_leaves.size() > auto_limit) {
         _has_remain |= true;
-        normal_leaves.resize(limit);
+        normal_leaves.resize(auto_limit);
     }
 
     // Merge back and sort by path name for stable column order.

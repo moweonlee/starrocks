@@ -294,8 +294,6 @@ message FlatJsonConfigPB {
     optional int64 flat_json_max_column_max = 4;
     // Per-JSON-column paths that must always be flattened, regardless of sparsity.
     repeated FlatJsonColumnPathsEntryPB flat_json_column_paths = 5;
-    // Upper bound on force-flattened columns per JSON column (0 => server default).
-    optional int64 flat_json_column_paths_max = 6;
 }
 
 message TabletMetaPB {

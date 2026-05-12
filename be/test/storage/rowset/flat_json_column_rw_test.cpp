@@ -2825,42 +2825,6 @@ TEST_F(FlatJsonColumnRWTest, testForcedColumnPathsNotInDataIsExcluded) {
     }
 }
 
-// column_paths_max caps the number of forced paths at write time.
-// Configure 3 forced paths but cap at 1 — only the leftmost survives.
-TEST_F(FlatJsonColumnRWTest, testForcedColumnPathsMaxCap) {
-    MutableColumnPtr write_col = JsonColumn::create();
-    auto* json_col = down_cast<JsonColumn*>(write_col.get());
-
-    ASSIGN_OR_ABORT(auto jv1, JsonValue::parse(R"({"k1": 1, "k2": 2, "k3": 3})"));
-    ASSIGN_OR_ABORT(auto jv2, JsonValue::parse(R"({"k1": 4, "k2": 5, "k3": 6})"));
-    ASSIGN_OR_ABORT(auto jv3, JsonValue::parse(R"({"k1": 7, "k2": 8, "k3": 9})"));
-
-    json_col->append(&jv1);
-    json_col->append(&jv2);
-    json_col->append(&jv3);
-
-    MutableColumnPtr read_col = JsonColumn::create();
-    ColumnWriterOptions writer_opts;
-    FlatJsonConfig config;
-    config.set_column_paths("j1", {"k1", "k2", "k3"});
-    config.set_column_paths_max(1);
-    // Force sparsity high so non-forced paths cannot squeeze in via auto-pickup.
-    config.set_flat_json_sparsity_factor(0.99);
-    writer_opts.field_name = "j1";
-    writer_opts.flat_json_config = &config;
-    writer_opts.need_flat = true;
-    test_json(writer_opts, "/test_flat_json_force_cap.data", write_col, read_col, nullptr);
-
-    size_t forced_present = 0;
-    for (int i = 0; i < writer_opts.meta->children_columns_size(); ++i) {
-        const auto& nm = writer_opts.meta->children_columns(i).name();
-        if (nm == "k1" || nm == "k2" || nm == "k3") {
-            forced_present++;
-        }
-    }
-    EXPECT_LE(forced_present, 1u) << "column_paths_max=1 must cap forced sub-columns at 1";
-}
-
 // Per-column scope: paths configured for "other" must not leak when writing column "j1".
 // ColumnWriterOptions.field_name supplies the column identity used for the lookup.
 TEST_F(FlatJsonColumnRWTest, testForcedColumnPathsPerColumnScope) {

@@ -179,7 +179,6 @@ private:
 
     // column_paths: dot-separated paths that bypass the sparsity check.
     std::unordered_set<std::string> _column_paths;
-    int _column_paths_max = FlatJsonConfig::DEFAULT_COLUMN_PATHS_MAX;
 
     size_t _total_rows;
     std::shared_ptr<JsonFlatPath> _path_root;

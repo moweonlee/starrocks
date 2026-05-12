@@ -17,7 +17,6 @@ package com.starrocks.catalog;
 import com.starrocks.common.AnalysisException;
 import com.starrocks.common.Config;
 import com.starrocks.common.util.PropertyAnalyzer;
-import com.starrocks.sql.analyzer.SemanticException;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -307,7 +306,7 @@ public class FlatJsonConfigValidationTest {
     }
 
     // ========================================================================
-    // flat_json.column_paths.<col> + flat_json.column_paths_max parsing tests
+    // flat_json.column_paths.<col> parsing tests
     // ========================================================================
 
     @Test
@@ -358,92 +357,4 @@ public class FlatJsonConfigValidationTest {
         Assertions.assertEquals(List.of("k1", "k2"), result.get("j1"));
     }
 
-    @Test
-    public void testAnalyzeFlatJsonColumnPaths_excludesAddRemoveOps() {
-        // Keys with .add / .remove suffix must NOT be returned by analyzeFlatJsonColumnPaths.
-        Map<String, String> properties = new HashMap<>();
-        properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX + "j1", "k1");
-        properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX + "j1." +
-                PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD, "k2");
-        properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX + "j1." +
-                PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE, "k3");
-
-        Map<String, List<String>> result = PropertyAnalyzer.analyzeFlatJsonColumnPaths(properties);
-
-        Assertions.assertEquals(1, result.size());
-        Assertions.assertEquals(List.of("k1"), result.get("j1"));
-    }
-
-    @Test
-    public void testAnalyzeFlatJsonColumnPathsOps_addRouting() {
-        Map<String, String> properties = new HashMap<>();
-        properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX + "j1", "k1");
-        properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX + "j1." +
-                PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD, "k2,k3");
-
-        Map<String, List<String>> addOps = PropertyAnalyzer.analyzeFlatJsonColumnPathsOps(
-                properties, PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD);
-
-        Assertions.assertEquals(1, addOps.size());
-        Assertions.assertEquals(List.of("k2", "k3"), addOps.get("j1"));
-
-        // Bare "j1" key must NOT show up in add-ops.
-        Assertions.assertFalse(addOps.values().stream().flatMap(List::stream).anyMatch("k1"::equals));
-    }
-
-    @Test
-    public void testAnalyzeFlatJsonColumnPathsOps_removeRouting() {
-        Map<String, String> properties = new HashMap<>();
-        properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX + "j1." +
-                PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE, "k1");
-
-        Map<String, List<String>> removeOps = PropertyAnalyzer.analyzeFlatJsonColumnPathsOps(
-                properties, PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE);
-
-        Assertions.assertEquals(1, removeOps.size());
-        Assertions.assertEquals(List.of("k1"), removeOps.get("j1"));
-    }
-
-    @Test
-    public void testAnalyzeFlatJsonColumnPathsMax_unsetReturnsMinusOne() {
-        // Sentinel -1 signals "fall back to cluster-wide Config.flat_json_column_paths_max".
-        Map<String, String> properties = new HashMap<>();
-
-        Assertions.assertEquals(-1, PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties));
-    }
-
-    @Test
-    public void testAnalyzeFlatJsonColumnPathsMax_zeroIsUnlimited() {
-        // 0 is the explicit "unlimited" semantic; not a sentinel.
-        Map<String, String> properties = new HashMap<>();
-        properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX, "0");
-
-        Assertions.assertEquals(0, PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties));
-    }
-
-    @Test
-    public void testAnalyzeFlatJsonColumnPathsMax_validInteger() {
-        Map<String, String> properties = new HashMap<>();
-        properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX, "3");
-
-        Assertions.assertEquals(3, PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties));
-    }
-
-    @Test
-    public void testAnalyzeFlatJsonColumnPathsMax_negativeRejected() {
-        Map<String, String> properties = new HashMap<>();
-        properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX, "-1");
-
-        Assertions.assertThrows(SemanticException.class,
-                () -> PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties));
-    }
-
-    @Test
-    public void testAnalyzeFlatJsonColumnPathsMax_nonIntegerRejected() {
-        Map<String, String> properties = new HashMap<>();
-        properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX, "abc");
-
-        Assertions.assertThrows(SemanticException.class,
-                () -> PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties));
-    }
 }
