@@ -31,23 +31,18 @@ Flat JSON은 여러 행에 걸쳐 빈번하게 등장하는 JSON 필드를 자�
 박아 스코프를 구분합니다:
 
 ```
-flat_json.column_paths.<json_컬럼명>            = "<경로1>, <경로2>, ..."
-flat_json.column_paths.<json_컬럼명>.add        = "<경로A>, <경로B>"        (ALTER 전용)
-flat_json.column_paths.<json_컬럼명>.remove     = "<경로C>"                  (ALTER 전용)
-flat_json.column_paths_max                      = <정수>                     (컬럼별 상한)
+flat_json.column_paths.<json_컬럼명> = "<경로1>, <경로2>, ..."
 ```
 
 - `<json_컬럼명>`은 테이블 스키마에 존재하는 JSON 타입 컬럼이어야 합니다. 존재하지 않거나
   JSON 타입이 아니면 DDL analyze 단계에서 실패합니다.
 - 경로는 쉼표로 구분합니다. 각 경로는 `$.` 접두사로 시작할 수 있으며(선택, 파싱 시 제거),
   중첩 경로는 `.`으로 구분합니다: `$.user.country`.
-- 예약 접미사 `.add`, `.remove`는 `ALTER TABLE ... SET (...)`에서만 유효합니다
-  (`CREATE TABLE`에서는 사용할 수 없음).
-- `flat_json.column_paths_max`는 **JSON 컬럼당** 강제 평탄화 컬럼의 상한입니다
-  (`flat_json.column.max`는 희소성 기반 컬럼 상한과 별개). 기본값은 `100`.
-  상한이 지정된 경로 수보다 작으면 **사용자 지정 순서 기준 앞에서 N개**만 유지됩니다
-  (hit율 기반 정렬 없음, 좌→우 순서). `0`으로 설정하면 지정한 모든 경로를 사용합니다
-  (시스템 컬럼 수 제한에만 영향받음).
+- 값을 빈 문자열로 설정하면 해당 컬럼의 강제 경로가 모두 제거됩니다.
+- 강제 경로는 `flat_json.column.max` budget 을 희소성 기반 컬럼과 함께 공유합니다.
+  강제 경로가 사용자 지정 순서대로 좌→우로 budget 을 먼저 소비하고, 남은 slot 에
+  희소성 기반 컬럼이 채워집니다. budget 을 초과한 경로는 raw remainder JSON 으로
+  강등됩니다 (기존 `column.max` 의 soft-cap 동작과 동일).
 
 ## 전제 조건
 
@@ -75,9 +70,7 @@ PROPERTIES (
     "flat_json.sparsity.factor"         = "0.5",
     "flat_json.column.max"              = "50",
     -- events.browser, events.utm_source을 희소성 무시하고 강제 평탄화
-    "flat_json.column_paths.events"     = "$.browser, $.utm_source",
-    -- 강제 경로의 컬럼별 상한 (선택; 기본 100)
-    "flat_json.column_paths_max"        = "20"
+    "flat_json.column_paths.events"     = "$.browser, $.utm_source"
 );
 ```
 
@@ -100,11 +93,7 @@ PROPERTIES (
 
 ## ALTER TABLE로 변경
 
-JSON 컬럼별로 3가지 연산을 지원합니다. 한 `ALTER` 문에서 조합할 수 있습니다.
-
-### 전체 교체
-
-해당 컬럼의 경로 리스트를 완전히 새 값으로 덮어씁니다.
+`ALTER TABLE ... SET (...)`으로 해당 컬럼의 경로 리스트를 완전히 새 값으로 덮어씁니다.
 
 ```sql
 ALTER TABLE user_events SET (
@@ -119,41 +108,12 @@ ALTER TABLE user_events SET (
 ALTER TABLE user_events SET ("flat_json.column_paths.events" = "");
 ```
 
-### 증분 추가
-
-기존 리스트에 없는 경로만 뒤에 추가합니다. 기존 경로는 보존됩니다.
-
-```sql
-ALTER TABLE user_events SET (
-    "flat_json.column_paths.events.add" = "$.device_id, $.session_id"
-);
-```
-
-### 증분 제거
-
-매칭되는 경로를 제거합니다. 현재 리스트에 없는 경로는 조용히 무시됩니다.
-
-```sql
-ALTER TABLE user_events SET (
-    "flat_json.column_paths.events.remove" = "$.utm_source"
-);
-```
-
-### 컬럼별 상한 조정
-
-```sql
-ALTER TABLE user_events SET ("flat_json.column_paths_max" = "50");
-```
-
-`0`으로 설정하면 지정한 모든 경로를 사용합니다 (시스템 컬럼 수 제한에만 영향받음).
-
-### 조합 예시
+여러 컬럼을 한 ALTER 에서 같이 갱신할 수 있습니다:
 
 ```sql
 ALTER TABLE logs SET (
-    "flat_json.column_paths.request.add"     = "$.user_agent",
-    "flat_json.column_paths.response.remove" = "$.latency_ms",
-    "flat_json.column_paths_max"             = "100"
+    "flat_json.column_paths.request"  = "$.method, $.path, $.user_agent",
+    "flat_json.column_paths.response" = "$.status"
 );
 ```
 
@@ -166,9 +126,9 @@ ALTER TABLE logs SET (
 | 미포함, 희소성 임계치 이상              | 일반 Flat JSON 휴리스틱으로 자동 평탄화.                          |
 | 미포함, 희소성 임계치 미만              | 잔여(remainder) JSON blob에 유지.                                 |
 
-두 쿼터는 독립적으로 동작합니다:
-- `flat_json.column.max`: **자동 감지된** 희소성 기반 컬럼의 상한.
-- `flat_json.column_paths_max`: **강제 지정된** 컬럼의 상한.
+강제 경로와 자동 감지 경로는 같은 `flat_json.column.max` budget 을 공유합니다.
+강제 경로가 사용자 지정 순서대로 좌→우로 budget 을 먼저 소비하고, 남은 slot 에
+자동 감지된 컬럼이 채워집니다.
 
 ## 검증: 단계별 가이드
 
@@ -280,7 +240,7 @@ Compaction flat json column: nulls(TINYINT),browser(VARCHAR),session(VARCHAR)
 | `flat JSON configuration must be set after enabling flat JSON.` | Flat JSON이 비활성 상태에서 `column_paths` 설정 시도.                  | 먼저 `ALTER TABLE t SET ("flat_json.enable" = "true");`.                   |
 | `flat_json_meta`에 설정한 경로가 안 보임                      | 아직 해당 경로가 어느 행에도 등장하지 않음 (`hits = 0`).                | 해당 경로를 포함한 데이터를 적재하거나 등장할 때까지 대기.                 |
 | 서브컬럼은 존재하지만 `AccessPathHits = 0`                    | 쿼리가 설정 변경 이전의 기존 rowset을 읽고 있음.                       | `ALTER TABLE t COMPACT;`로 재평탄화.                                       |
-| 지정한 경로 수가 쿼터 초과                                    | 해당 JSON 컬럼에 대해 `flat_json.column_paths_max`에 도달 (기본 100).   | 상한을 올리거나 0(무제한)으로 설정, 또는 `.remove`로 경로를 줄임.          |
+| 지정한 경로 수가 쿼터 초과                                    | 해당 JSON 컬럼의 `flat_json.column.max` budget 도달.                    | `flat_json.column.max` 를 올리거나 ALTER full-replace 로 경로 수를 줄임.    |
 | Remove 후 follower FE의 상태가 이상함                         | 초기 버전의 emit-only-if-non-empty 버그.                                | 본 설계에서는 항상 전체 상태를 emit하여 수정됨.                            |
 
 ## 메타데이터와 클러스터 전체 일관성

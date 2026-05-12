@@ -32,24 +32,19 @@ by the sparsity heuristic and consume the `flat_json.column.max` quota.
 column name:
 
 ```
-flat_json.column_paths.<json_column_name>             = "<path1>, <path2>, ..."
-flat_json.column_paths.<json_column_name>.add         = "<pathA>, <pathB>"       (ALTER only)
-flat_json.column_paths.<json_column_name>.remove      = "<pathC>"                (ALTER only)
-flat_json.column_paths_max                            = <int>                    (per-column cap)
+flat_json.column_paths.<json_column_name> = "<path1>, <path2>, ..."
 ```
 
 - `<json_column_name>` is the identifier of a JSON column in the table schema.
   If the column does not exist or is not of JSON type, the DDL fails during analysis.
 - Paths are comma-separated. Each path may start with `$.` (optional; stripped
   at parse time). Nested paths use `.` as separator: `$.user.country`.
-- The reserved suffixes `.add` and `.remove` are only valid inside
-  `ALTER TABLE ... SET (...)` — not at `CREATE TABLE` time.
-- `flat_json.column_paths_max` caps the number of force-flattened columns **per
-  JSON column**, independent of `flat_json.column.max` (which caps
-  sparsity-derived columns). Default is `100`. When the cap is smaller than the
-  number of configured paths, the **first N paths in user-specified order** are
-  kept (left-to-right, not by hit frequency). Setting it to `0` means "use all
-  specified paths" (bounded only by the system column count limit).
+- Setting the value to an empty string clears all force paths for that column.
+- The forced paths share the same `flat_json.column.max` budget as the
+  sparsity-derived columns. Forced paths consume the budget first (left-to-right
+  in user-specified order); any leftover slots are filled by sparsity-derived
+  columns. Excess paths beyond the budget are pushed to the raw remainder JSON
+  blob, matching the existing `column.max` soft-cap behavior.
 
 ## Prerequisites
 
@@ -79,9 +74,7 @@ PROPERTIES (
     "flat_json.sparsity.factor"         = "0.5",
     "flat_json.column.max"              = "50",
     -- Force-flatten events.browser and events.utm_source regardless of sparsity.
-    "flat_json.column_paths.events"     = "$.browser, $.utm_source",
-    -- Per-column cap on force paths (optional; default is 100).
-    "flat_json.column_paths_max"        = "20"
+    "flat_json.column_paths.events"     = "$.browser, $.utm_source"
 );
 ```
 
@@ -104,12 +97,7 @@ PROPERTIES (
 
 ## Update via `ALTER TABLE`
 
-Three operations are supported per JSON column. They can be combined in one
-`ALTER` statement.
-
-### Full replace
-
-Overwrites the complete path list for a column.
+Use `ALTER TABLE ... SET (...)` to overwrite the complete path list for a column.
 
 ```sql
 ALTER TABLE user_events SET (
@@ -124,41 +112,12 @@ Setting the value to an empty string clears all force paths for that column
 ALTER TABLE user_events SET ("flat_json.column_paths.events" = "");
 ```
 
-### Incremental add
-
-Appends paths not already in the list. Existing paths are preserved.
-
-```sql
-ALTER TABLE user_events SET (
-    "flat_json.column_paths.events.add" = "$.device_id, $.session_id"
-);
-```
-
-### Incremental remove
-
-Removes matching paths. Paths not in the current list are silently ignored.
-
-```sql
-ALTER TABLE user_events SET (
-    "flat_json.column_paths.events.remove" = "$.utm_source"
-);
-```
-
-### Global per-column cap
-
-```sql
-ALTER TABLE user_events SET ("flat_json.column_paths_max" = "50");
-```
-
-Setting it to `0` means "use all specified paths" (no artificial cap; bounded only by the system column count limit).
-
-### Combined example
+Multiple columns can be updated together:
 
 ```sql
 ALTER TABLE logs SET (
-    "flat_json.column_paths.request.add"     = "$.user_agent",
-    "flat_json.column_paths.response.remove" = "$.latency_ms",
-    "flat_json.column_paths_max"             = "100"
+    "flat_json.column_paths.request"  = "$.method, $.path, $.user_agent",
+    "flat_json.column_paths.response" = "$.status"
 );
 ```
 
@@ -171,9 +130,9 @@ ALTER TABLE logs SET (
 | Not listed, above sparsity  | Auto-flattened via normal Flat JSON heuristic.                   |
 | Not listed, below sparsity  | Stays inside the remainder JSON blob.                            |
 
-The two quotas are independent:
-- `flat_json.column.max` caps **auto-detected** sparse-flattened columns.
-- `flat_json.column_paths_max` caps **forced** columns.
+Forced and auto-derived columns share the same `flat_json.column.max` budget.
+Forced columns consume the budget first (left-to-right in user-specified order);
+auto-derived columns fill any remaining slots.
 
 ## Verification: step-by-step
 
@@ -286,7 +245,7 @@ Repeat Step 3 to confirm `browser` is now present.
 | `flat JSON configuration must be set after enabling flat JSON.` | Tried to set `column_paths` on a table with `flat_json.enable = false`. | `ALTER TABLE t SET ("flat_json.enable" = "true");` first.                  |
 | `flat_json_meta` does not list a configured path           | The path does not appear in ANY row yet (`hits = 0`).                    | Load data containing the path, or wait until such rows arrive.             |
 | `AccessPathHits = 0` but sub-column exists                 | Query reads old rowsets predating the config change.                     | Run `ALTER TABLE t COMPACT;` to re-flatten.                                |
-| Configured paths exceed the quota                          | `flat_json.column_paths_max` reached for that JSON column (default 100). | Raise the cap, set to 0 for no limit, or prune the list with `.remove`.    |
+| Configured paths exceed the quota                          | `flat_json.column.max` budget reached for that JSON column.              | Raise `flat_json.column.max`, or prune the list with a full-replace `ALTER`. |
 | Sync appears wrong on follower FE after removing paths     | Older builds had an emit-only-if-non-empty bug.                          | This page's design emits the full state on every write (fixed).            |
 
 ## Metadata and cluster-wide consistency

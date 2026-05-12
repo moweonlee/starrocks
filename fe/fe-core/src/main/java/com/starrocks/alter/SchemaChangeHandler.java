@@ -2517,24 +2517,14 @@ public class SchemaChangeHandler extends AlterHandler {
     }
 
     // Extracts the JSON column name from a key of the form
-    //   flat_json.column_paths.<col_name>        (returns col_name)
-    //   flat_json.column_paths.<col_name>.add    (returns col_name)
-    //   flat_json.column_paths.<col_name>.remove (returns col_name)
+    //   flat_json.column_paths.<col_name>  (returns col_name)
     // Returns empty string if the key does not match. Used by ALTER to detect stale
     // per-column properties that should be erased before leader->follower replication.
     private static String extractColumnNameForFlatJsonKey(String key) {
         if (!key.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)) {
             return "";
         }
-        String suffix = key.substring(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX.length());
-        if (suffix.endsWith("." + PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD)) {
-            return suffix.substring(0, suffix.length() - PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD.length() - 1);
-        }
-        if (suffix.endsWith("." + PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE)) {
-            return suffix.substring(0,
-                    suffix.length() - PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE.length() - 1);
-        }
-        return suffix;
+        return key.substring(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX.length());
     }
 
     public boolean updateFlatJsonConfigMeta(Database db, Long tableId, Map<String, String> properties,
@@ -2572,7 +2562,6 @@ public class SchemaChangeHandler extends AlterHandler {
         if (!flatJsonEnabled && (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX) ||
-                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX) ||
                 PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties))) {
             throw new RuntimeException("flat JSON configuration must be set after enabling flat JSON.");
         }
@@ -2605,42 +2594,6 @@ public class SchemaChangeHandler extends AlterHandler {
             java.util.List<String> existing = newFlatJsonConfig.getColumnPaths(entry.getKey());
             if (!entry.getValue().equals(existing)) {
                 newFlatJsonConfig.setColumnPaths(entry.getKey(), entry.getValue());
-                hasChanged = true;
-            }
-        }
-        // Per-column incremental add: flat_json.column_paths.<col>.add = "..."
-        java.util.Map<String, java.util.List<String>> addMap = PropertyAnalyzer.analyzeFlatJsonColumnPathsOps(
-                properties, PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_ADD);
-        for (java.util.Map.Entry<String, java.util.List<String>> entry : addMap.entrySet()) {
-            java.util.List<String> current = new java.util.ArrayList<>(
-                    newFlatJsonConfig.getColumnPaths(entry.getKey()));
-            boolean localChanged = false;
-            for (String path : entry.getValue()) {
-                if (!current.contains(path)) {
-                    current.add(path);
-                    localChanged = true;
-                }
-            }
-            if (localChanged) {
-                newFlatJsonConfig.setColumnPaths(entry.getKey(), current);
-                hasChanged = true;
-            }
-        }
-        // Per-column incremental remove: flat_json.column_paths.<col>.remove = "..."
-        java.util.Map<String, java.util.List<String>> removeMap = PropertyAnalyzer.analyzeFlatJsonColumnPathsOps(
-                properties, PropertyAnalyzer.FLAT_JSON_COLUMN_PATHS_OP_REMOVE);
-        for (java.util.Map.Entry<String, java.util.List<String>> entry : removeMap.entrySet()) {
-            java.util.List<String> current = new java.util.ArrayList<>(
-                    newFlatJsonConfig.getColumnPaths(entry.getKey()));
-            if (current.removeAll(entry.getValue())) {
-                newFlatJsonConfig.setColumnPaths(entry.getKey(), current);
-                hasChanged = true;
-            }
-        }
-        if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_MAX)) {
-            int max = PropertyAnalyzer.analyzeFlatJsonColumnPathsMax(properties);
-            if (max >= 0 && max != newFlatJsonConfig.getFlatJsonColumnPathsMax()) {
-                newFlatJsonConfig.setFlatJsonColumnPathsMax(max);
                 hasChanged = true;
             }
         }

@@ -1770,10 +1770,6 @@ CONF_mDouble(json_flat_sparsity_factor, "0.3");
 // the maximum number of extracted JSON sub-field
 CONF_mInt32(json_flat_column_max, "100");
 
-// the per-column cap on user-specified force-flatten paths (flat_json.column_paths.<col>).
-// 0 means use all specified paths (bounded only by the system column count limit).
-CONF_mInt32(flat_json_column_paths_max, "0");
-
 // for whitelist on flat json remain data, max set 1kb
 CONF_mInt32(json_flat_remain_filter_max_bytes, "1024");
 // ======================= FLAT JSON end ==============================================
