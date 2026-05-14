@@ -68,6 +68,11 @@ public:
     LogicalType type = LogicalType::TYPE_JSON;
     bool remain = false;
     bool force = false; // true: must flatten regardless of sparsity (column_paths)
+    // User-specified order index of the forced path (0-based). -1 = not forced (or order unknown).
+    // Used by _finalize to truncate forced_leaves left-to-right by user order, NOT by
+    // hash-iteration order of `children`. Without this, the "left-to-right priority" promise
+    // would be broken because `children` is a hash map.
+    int force_order = -1;
     OP op = OP_INCLUDE; // merge flat json use, to mark the path is need
     FlatJsonHashMap<std::string_view, std::unique_ptr<JsonFlatPath>> children;
 
@@ -166,7 +171,10 @@ private:
 
     // Pre-mark all nodes along `path` (dot-separated) with force=true so that
     // _clean_sparsity_path and _dfs_finalize never discard them.
-    void _mark_force_path(const std::string_view& path, JsonFlatPath* node);
+    // `order` is the user-specified order index of this path (used by _finalize for
+    // left-to-right truncation). Only the leaf node gets force_order set; intermediate
+    // nodes only get force=true.
+    void _mark_force_path(const std::string_view& path, JsonFlatPath* node, int order);
 
 private:
     bool _has_remain = false;
@@ -178,7 +186,10 @@ private:
     int _max_column = 0;
 
     // column_paths: dot-separated paths that bypass the sparsity check.
-    std::unordered_set<std::string> _column_paths;
+    // Stored as ordered vector (NOT unordered_set) so that _mark_force_path can pass the
+    // user-specified order index to each path. This index is required by _finalize to
+    // truncate forced paths left-to-right when forced count exceeds flat_json.column.max.
+    std::vector<std::string> _column_paths;
 
     size_t _total_rows;
     std::shared_ptr<JsonFlatPath> _path_root;

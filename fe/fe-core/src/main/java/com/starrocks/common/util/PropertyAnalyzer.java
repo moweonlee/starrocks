@@ -653,7 +653,11 @@ public class PropertyAnalyzer {
 
     // Parses a comma-separated list of JSON paths. Strips the optional "$." prefix so the
     // returned strings are in internal dot-separated form ("a.b.c"). Empty tokens are skipped.
-    private static java.util.List<String> parseFlatJsonPathList(String raw) {
+    // Rejects duplicate paths so that the user's intent is unambiguous and the budget
+    // accounting (flat_json.column.max) reflects a one-to-one mapping between list entries
+    // and sub-columns. BE deduplicates physically via its path-tree, so a duplicate entry
+    // is always operator error.
+    private static java.util.List<String> parseFlatJsonPathList(String raw, String propKey) {
         if (raw == null) {
             return java.util.Collections.emptyList();
         }
@@ -662,14 +666,21 @@ public class PropertyAnalyzer {
             return java.util.Collections.emptyList();
         }
         java.util.List<String> result = new java.util.ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
         for (String part : raw.split(",")) {
             String path = part.trim();
             if (path.startsWith("$.")) {
                 path = path.substring(2);
             }
-            if (!path.isEmpty()) {
-                result.add(path);
+            if (path.isEmpty()) {
+                continue;
             }
+            if (!seen.add(path)) {
+                throw new SemanticException(
+                        "Duplicate path '" + path + "' in " + propKey
+                                + ". flat_json.column_paths must list each path at most once.");
+            }
+            result.add(path);
         }
         return java.util.Collections.unmodifiableList(result);
     }
@@ -690,7 +701,7 @@ public class PropertyAnalyzer {
             if (col.isEmpty()) {
                 continue;
             }
-            result.put(col, parseFlatJsonPathList(entry.getValue()));
+            result.put(col, parseFlatJsonPathList(entry.getValue(), key));
         }
         return result;
     }

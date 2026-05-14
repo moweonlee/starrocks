@@ -399,8 +399,10 @@ void JsonPathDeriver::init_flat_json_config(const FlatJsonConfig* flat_json_conf
         _column_paths.clear();
         if (!column_name.empty()) {
             // Load only the paths targeted at this specific JSON column.
+            // Use vector (preserve user order) — _mark_force_path needs the index for
+            // left-to-right truncation in _finalize.
             if (const auto* paths = flat_json_config->get_column_paths_for(column_name); paths != nullptr) {
-                _column_paths.insert(paths->begin(), paths->end());
+                _column_paths.assign(paths->begin(), paths->end());
             }
         }
     } else {
@@ -444,8 +446,13 @@ void JsonPathDeriver::derived(const std::vector<const Column*>& json_datas) {
 
     _path_root = std::make_shared<JsonFlatPath>();
     // Pre-mark force paths so _clean_sparsity_path never prunes them.
-    for (const auto& fp : _column_paths) {
-        _mark_force_path(fp, _path_root.get());
+    // The index `i` is the user-specified order and is recorded on the leaf node's
+    // force_order — used by _finalize to truncate left-to-right when forced count
+    // exceeds flat_json.column.max. Without this, the `children` hash map's iteration
+    // order would determine which forced paths survive (non-deterministic from the
+    // user's perspective).
+    for (size_t i = 0; i < _column_paths.size(); ++i) {
+        _mark_force_path(_column_paths[i], _path_root.get(), static_cast<int>(i));
     }
     // init path by flat JSON
     _derived_on_flat_json(json_datas);
@@ -594,9 +601,17 @@ void JsonPathDeriver::_derived(const Column* col, size_t mark_row) {
 
 // Walk the tree along `path` (dot-separated), creating nodes as needed, and
 // mark every node on the path with force=true so they survive early pruning.
-void JsonPathDeriver::_mark_force_path(const std::string_view& path, JsonFlatPath* node) {
+// Only the leaf (path.empty() after this descent) records `force_order` — the
+// user-specified order index. Intermediate nodes don't need an order because the
+// truncation in _finalize only looks at leaves. If the same leaf is marked more
+// than once (duplicate path in user input), keep the FIRST order to preserve
+// left-to-right semantics on dedup.
+void JsonPathDeriver::_mark_force_path(const std::string_view& path, JsonFlatPath* node, int order) {
     node->force = true;
     if (path.empty()) {
+        if (node->force_order < 0) {
+            node->force_order = order;
+        }
         return;
     }
     auto [key, next] = JsonFlatPath::split_path(path);
@@ -604,7 +619,7 @@ void JsonPathDeriver::_mark_force_path(const std::string_view& path, JsonFlatPat
     if (inserted) {
         iter->second = std::make_unique<JsonFlatPath>();
     }
-    _mark_force_path(next, iter->second.get());
+    _mark_force_path(next, iter->second.get(), order);
 }
 
 void JsonPathDeriver::_clean_sparsity_path(const std::string_view& name, JsonFlatPath* node, size_t check_hits_min) {
@@ -793,9 +808,18 @@ void JsonPathDeriver::_finalize() {
         }
     }
 
+    // Sort forced_leaves by user-specified order (force_order). _dfs_finalize walks
+    // the path tree in `children` hash-map order, which is NOT user input order, so
+    // without this sort the truncation below would drop paths non-deterministically
+    // from the user's perspective. force_order is assigned in _mark_force_path from
+    // the index in _column_paths (the vector preserves user input order).
+    std::sort(forced_leaves.begin(), forced_leaves.end(),
+              [](const auto& a, const auto& b) { return a.first->force_order < b.first->force_order; });
+
     size_t budget = _max_column > 0 ? static_cast<size_t>(_max_column) : std::numeric_limits<size_t>::max();
 
-    // Forced first: left-to-right truncation, excess goes to remain.
+    // Forced first: left-to-right truncation (by user-specified force_order),
+    // excess goes to remain.
     size_t forced_kept = std::min(forced_leaves.size(), budget);
     for (size_t i = forced_kept; i < forced_leaves.size(); i++) {
         forced_leaves[i].first->remain = true;
