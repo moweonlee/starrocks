@@ -237,6 +237,37 @@ Compaction flat json column: nulls(TINYINT),browser(VARCHAR),session(VARCHAR)
 
 Repeat Step 3 to confirm `browser` is now present.
 
+## Limitations (inherited from Flat JSON)
+
+`flat_json.column_paths` builds on the same path-tree representation as the
+base Flat JSON feature, so it inherits these limitations from
+[Flat JSON](./Flat_json.md):
+
+- **JSON Object keys only — JSON Array elements are not supported.** Paths
+  like `$.items[0].name` or `$.users[1].email` cannot be materialized as
+  sub-columns. If you put such a path in `flat_json.column_paths.<col>`,
+  the path-tree treats `[N]` as part of a literal key name. The leaf
+  receives zero hits and the path is silently skipped; in pathological
+  cases (when array paths are the only forced paths) the whole JSON column
+  may not be flattened at all. Queries via `get_json_*(col, '$.a[0].b')`
+  still work, but they fall back to raw-JSON parsing without the
+  sub-column speedup.
+  - Workaround: redesign the JSON to use named keys
+    (e.g., `{"first_item": {...}, "second_item": {...}}`).
+- **Only leaf primitives are materialized.** If a path resolves to an
+  intermediate JSON object (e.g., `forced = "a"` when the data is
+  `{"a": {"b": 1, "c": 2}}`), only the leaf paths `a.b` and `a.c` are
+  candidates for flattening — `a` itself is not stored as a sub-column.
+  Specifying an intermediate path in `column_paths` therefore has no
+  effect unless the data has `a` as a scalar in some rows.
+- **Path tokens are dot-separated only.** Wildcards (`*`, `a.*`) and
+  malformed forms (`a..b`, leading/trailing dots) are accepted by the
+  property parser but silently produce no sub-column.
+
+These limitations are not specific to this feature — they apply to the
+entire StarRocks Flat JSON subsystem. See the
+[Feature Limitations section in Flat JSON](./Flat_json.md#feature-limitations).
+
 ## Troubleshooting
 
 | Symptom                                                    | Cause                                                                    | Fix                                                                        |

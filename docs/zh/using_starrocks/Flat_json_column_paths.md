@@ -232,6 +232,30 @@ Compaction flat json column: nulls(TINYINT),browser(VARCHAR),session(VARCHAR)
 
 그 후 Step 3을 반복해서 `browser`가 나타나는지 확인합니다.
 
+## 제약 사항 (Flat JSON 으로부터 상속)
+
+`flat_json.column_paths` 는 기본 Flat JSON 의 path tree 구조를 그대로 활용하므로,
+[Flat JSON](./Flat_json.md) 의 제약을 동일하게 상속합니다:
+
+- **JSON Object key 만 지원 — JSON Array element 는 미지원**.
+  `$.items[0].name`, `$.users[1].email` 같은 경로는 sub-column 으로 materialize 안 됨.
+  `flat_json.column_paths.<col>` 에 이런 경로를 넣으면 path tree 가 `[N]` 을 literal key
+  이름의 일부로 처리합니다. leaf 가 hit=0 이 되어 silent skip; 극단적으로 forced 경로가
+  array path 만 있으면 JSON column 전체가 flat 안 되는 경우도 발생.
+  query `get_json_*(col, '$.a[0].b')` 는 여전히 동작하지만 raw JSON 파싱 fallback
+  으로 sub-column 가속 없음.
+  - 우회: JSON 구조를 named key 로 변경 (예: `{"first_item": {...}, "second_item": {...}}`).
+- **Leaf primitive 만 materialize**. 경로가 intermediate JSON object 를 가리키면
+  (예: 데이터가 `{"a": {"b": 1, "c": 2}}` 인데 `forced = "a"`), leaf 인 `a.b`, `a.c`
+  만 flatten 후보. `a` 자체는 sub-column 으로 저장 안 됨. intermediate path 를
+  `column_paths` 에 지정해도 효과 없음 (데이터에 `a` 가 scalar 인 row 가 없는 한).
+- **Path 토큰은 점 (`.`) 구분만 지원**. Wildcard (`*`, `a.*`) 와 malformed 형식
+  (`a..b`, 시작/끝의 점) 은 property parser 가 accept 하지만 sub-column 으로
+  변환되지 않음 (silent no-op).
+
+이 제약들은 본 기능 한정이 아니라 StarRocks Flat JSON 전체에 적용됩니다.
+자세한 내용은 [Flat JSON 의 Feature Limitations](./Flat_json.md#feature-limitations) 참조.
+
 ## 트러블슈팅
 
 | 증상                                                          | 원인                                                                   | 조치                                                                       |

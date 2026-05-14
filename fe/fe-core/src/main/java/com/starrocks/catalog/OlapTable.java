@@ -146,6 +146,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -3169,12 +3170,27 @@ public class OlapTable extends Table {
                     properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX, flatJsonColumnMax);
                 }
 
-                // flat json per-column force paths: forward any key under the prefix verbatim
+                // flat json per-column force paths: forward any key under the prefix, but
+                // only for JSON columns that still exist in the schema. If the underlying
+                // JSON column was dropped via ALTER TABLE DROP COLUMN, the property entry
+                // may linger in metadata; we filter it out at emit time so SHOW CREATE TABLE
+                // never shows orphan references. Same pattern as `bloom_filter_columns`
+                // (see getBfColumnNames()).
+                Set<String> existingJsonColumnNames = new HashSet<>();
+                for (Column col : getBaseSchema()) {
+                    if (col.getType() != null && col.getType().isJsonType()) {
+                        existingJsonColumnNames.add(col.getName());
+                    }
+                }
                 for (Map.Entry<String, String> entry : tableProperties.entrySet()) {
                     String key = entry.getKey();
                     if (key.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)
                             && !Strings.isNullOrEmpty(entry.getValue())) {
-                        properties.put(key, entry.getValue());
+                        String columnName = key.substring(
+                                PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX.length());
+                        if (existingJsonColumnNames.contains(columnName)) {
+                            properties.put(key, entry.getValue());
+                        }
                     }
                 }
 
