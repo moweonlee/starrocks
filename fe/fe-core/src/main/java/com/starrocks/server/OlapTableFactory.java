@@ -977,8 +977,9 @@ public class OlapTableFactory implements AbstractTableFactory {
                 }
             }
 
-            // Remove the per-column keys from the raw properties map so downstream handlers
-            // don't re-process them, but let them be re-emitted later via FlatJsonConfig.toProperties().
+            // Drop the consumed per-column keys so the trailing `properties.isEmpty()` check
+            // (line ~817/851) does not reject them as "Unknown properties". Re-emission for
+            // SHOW CREATE TABLE goes through FlatJsonConfig.toProperties() instead.
             properties.keySet().removeIf(k ->
                     k.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX));
 
