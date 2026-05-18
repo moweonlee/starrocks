@@ -53,6 +53,12 @@ public:
     int get_flat_json_max_column_max() const { return _flat_json_max_column_max; }
     void set_flat_json_max_column_max(int max) { _flat_json_max_column_max = max; }
 
+    // Configuration version. FE-driven monotonic counter; persisted to BE via
+    // TabletMetadataUpdateAgentTask and reported back through TTabletInfo so the
+    // ReportHandler reconciliation loop can re-push when BE has fallen behind.
+    int64_t get_flat_json_config_version() const { return _flat_json_config_version; }
+    void set_flat_json_config_version(int64_t version) { _flat_json_config_version = version; }
+
     // Per-JSON-column force-flatten paths (dot-separated, no leading "$.").
     const ColumnPathsMap& get_column_paths_map() const { return _flat_json_column_paths; }
 
@@ -73,6 +79,7 @@ public:
         binlog_config_pb->set_flat_json_null_factor(_flat_json_null_factor);
         binlog_config_pb->set_flat_json_sparsity_factor(_flat_json_sparsity_factor);
         binlog_config_pb->set_flat_json_max_column_max(_flat_json_max_column_max);
+        binlog_config_pb->set_version(_flat_json_config_version);
         binlog_config_pb->clear_flat_json_column_paths();
         for (const auto& [col, paths] : _flat_json_column_paths) {
             auto* entry = binlog_config_pb->add_flat_json_column_paths();
@@ -90,6 +97,7 @@ public:
         _flat_json_sparsity_factor = config.get_flat_json_sparsity_factor();
         _flat_json_max_column_max = config.get_flat_json_max_column_max();
         _flat_json_column_paths = config.get_column_paths_map();
+        _flat_json_config_version = config.get_flat_json_config_version();
     }
 
     void update(const TFlatJsonConfig& config) {
@@ -97,6 +105,7 @@ public:
         _flat_json_null_factor = config.flat_json_null_factor;
         _flat_json_sparsity_factor = config.flat_json_sparsity_factor;
         _flat_json_max_column_max = config.flat_json_column_max;
+        _flat_json_config_version = config.__isset.version ? config.version : 0;
         _flat_json_column_paths.clear();
         if (config.__isset.flat_json_column_paths) {
             for (const auto& [col, paths] : config.flat_json_column_paths) {
@@ -110,6 +119,7 @@ public:
         _flat_json_null_factor = flat_json_config_pb.flat_json_null_factor();
         _flat_json_sparsity_factor = flat_json_config_pb.flat_json_sparsity_factor();
         _flat_json_max_column_max = flat_json_config_pb.flat_json_max_column_max();
+        _flat_json_config_version = flat_json_config_pb.has_version() ? flat_json_config_pb.version() : 0;
         _flat_json_column_paths.clear();
         for (const auto& entry : flat_json_config_pb.flat_json_column_paths()) {
             std::vector<std::string> v(entry.paths().begin(), entry.paths().end());
@@ -133,6 +143,7 @@ public:
             _flat_json_sparsity_factor = other._flat_json_sparsity_factor;
             _flat_json_max_column_max = other._flat_json_max_column_max;
             _flat_json_column_paths = other._flat_json_column_paths;
+            _flat_json_config_version = other._flat_json_config_version;
         }
         return *this;
     }
@@ -158,7 +169,8 @@ public:
             oss << "]";
             first_col = false;
         }
-        oss << "}";
+        oss << "}, ";
+        oss << "version=" << _flat_json_config_version;
         oss << "}";
         return oss.str();
     }
@@ -170,5 +182,8 @@ private:
     int _flat_json_max_column_max = 0;
     // Per-JSON-column force-flatten paths: column_name -> set of dot-separated paths (no leading "$.").
     ColumnPathsMap _flat_json_column_paths;
+    // FE-driven monotonic counter; 0 means "never modified after CREATE". Used by the
+    // ReportHandler reconciliation loop to decide whether to re-push.
+    int64_t _flat_json_config_version = 0;
 };
 } // namespace starrocks

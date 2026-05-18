@@ -92,6 +92,10 @@ struct TFlatJsonConfig {
     4: optional i64 flat_json_column_max;
     // Per-JSON-column force-flatten paths: column_name -> list of dot-separated paths (no leading "$.").
     5: optional map<string, list<string>> flat_json_column_paths;
+    // Version of the configuration. Mirrors TBinlogConfig.version: FE increments on every
+    // ALTER, BE persists the latest version it has applied, and FE reconciliation pushes
+    // when the BE-reported version is behind the FE-tracked one.
+    6: optional i64 version;
 }
 
 // If you want to add types,

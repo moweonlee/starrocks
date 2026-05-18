@@ -18,6 +18,7 @@ import com.google.gson.annotations.SerializedName;
 import com.starrocks.common.Config;
 import com.starrocks.common.io.Writable;
 import com.starrocks.common.util.PropertyAnalyzer;
+import com.starrocks.sql.analyzer.SemanticException;
 import com.starrocks.thrift.TFlatJsonConfig;
 
 import java.util.ArrayList;
@@ -46,12 +47,19 @@ public class FlatJsonConfig implements Writable {
     @SerializedName("flatJsonColumnPaths")
     private Map<String, List<String>> flatJsonColumnPaths;
 
+    // Configuration version. Incremented on every ALTER, persisted to BE via
+    // TabletMetadataUpdateAgentTask, and reported back via TTabletInfo for reconciliation.
+    // Mirrors BinlogConfig.configVersion.
+    @SerializedName("configVersion")
+    private long configVersion;
+
     public FlatJsonConfig(boolean enabled, double nullFactor, double sparsityFactor, int columnMax) {
         this.flatJsonEnable = enabled;
         this.flatJsonNullFactor = nullFactor;
         this.flatJsonSparsityFactor = sparsityFactor;
         this.flatJsonColumnMax = columnMax;
         this.flatJsonColumnPaths = new LinkedHashMap<>();
+        this.configVersion = 0;
     }
 
     public FlatJsonConfig(FlatJsonConfig config) {
@@ -60,6 +68,7 @@ public class FlatJsonConfig implements Writable {
         this.flatJsonSparsityFactor = config.getFlatJsonSparsityFactor();
         this.flatJsonColumnMax = config.getFlatJsonColumnMax();
         this.flatJsonColumnPaths = deepCopyPaths(config.getFlatJsonColumnPaths());
+        this.configVersion = config.getVersion();
     }
 
     public FlatJsonConfig() {
@@ -138,6 +147,20 @@ public class FlatJsonConfig implements Writable {
         return list == null ? Collections.emptyList() : list;
     }
 
+    // Configuration version accessors. FE increments on every ALTER (so the BE-side push and
+    // ReportHandler reconciliation can detect drift). 0 means "never modified after CREATE".
+    public long getVersion() {
+        return configVersion;
+    }
+
+    public void setVersion(long version) {
+        this.configVersion = version;
+    }
+
+    public void incVersion() {
+        this.configVersion++;
+    }
+
     // Replaces the path list for a single JSON column. Passing an empty/null list REMOVES
     // the entry so the column falls back to pure sparsity-based flattening.
     public void setColumnPaths(String columnName, List<String> paths) {
@@ -178,6 +201,7 @@ public class FlatJsonConfig implements Writable {
 
     public TFlatJsonConfig toTFlatJsonConfig() {
         TFlatJsonConfig tFlatJsonConfig = new TFlatJsonConfig();
+        tFlatJsonConfig.setVersion(configVersion);
         tFlatJsonConfig.setFlat_json_enable(flatJsonEnable);
         tFlatJsonConfig.setFlat_json_null_factor(flatJsonNullFactor);
         tFlatJsonConfig.setFlat_json_sparsity_factor(flatJsonSparsityFactor);
@@ -208,5 +232,38 @@ public class FlatJsonConfig implements Writable {
                 "flat_json_column_paths : %s }",
                 flatJsonEnable, flatJsonNullFactor, flatJsonSparsityFactor, flatJsonColumnMax,
                 getFlatJsonColumnPaths());
+    }
+
+    /**
+     * Reject any per-JSON-column forced path list whose size exceeds {@code flat_json.column.max}.
+     *
+     * Why: the BE-side {@code _finalize} silently truncates excess forced paths to {@code remain}
+     * (raw JSON fallback) without warning, so an operator who specified, say, 5 forced paths
+     * with {@code column.max=4} ends up with only the leftmost 4 columnized — the 5th appears
+     * to work (SELECT returns correct rows) but never gets the fast path. Fail loudly at
+     * validate time instead.
+     *
+     * Callers: {@link OlapTableFactory#processFlatJsonConfig} (CREATE TABLE) and
+     * {@link SchemaChangeHandler#updateFlatJsonConfigMeta} (ALTER TABLE).
+     */
+    public void validateColumnPathsAgainstBudget() {
+        if (flatJsonColumnPaths == null || flatJsonColumnPaths.isEmpty()) {
+            return;
+        }
+        if (flatJsonColumnMax <= 0) {
+            // 0 / negative is treated as "unlimited" by _finalize; no truncation can happen.
+            return;
+        }
+        for (Map.Entry<String, List<String>> entry : flatJsonColumnPaths.entrySet()) {
+            int size = entry.getValue() == null ? 0 : entry.getValue().size();
+            if (size > flatJsonColumnMax) {
+                throw new SemanticException(String.format(
+                        "flat_json.column_paths.%s declares %d paths, which exceeds " +
+                                "flat_json.column.max=%d. Reduce the path list or raise " +
+                                "flat_json.column.max so all forced paths can be columnized; " +
+                                "without this guard the BE would silently truncate the excess.",
+                        entry.getKey(), size, flatJsonColumnMax));
+            }
+        }
     }
 }

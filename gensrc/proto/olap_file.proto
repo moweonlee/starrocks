@@ -294,6 +294,9 @@ message FlatJsonConfigPB {
     optional int64 flat_json_max_column_max = 4;
     // Per-JSON-column paths that must always be flattened, regardless of sparsity.
     repeated FlatJsonColumnPathsEntryPB flat_json_column_paths = 5;
+    // Configuration version. Persisted with tablet meta so a BE restart preserves whichever
+    // ALTER push it had applied. Reported back via TTabletInfo to drive reconciliation.
+    optional int64 version = 6;
 }
 
 message TabletMetaPB {

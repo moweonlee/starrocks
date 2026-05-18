@@ -964,6 +964,10 @@ public class OlapTableFactory implements AbstractTableFactory {
                 flatJsonConfig.setFlatJsonColumnPaths(perCol);
             }
 
+            // Fail at CREATE time when any per-column forced path list exceeds flat_json.column.max,
+            // instead of letting the BE silently truncate at flush.
+            flatJsonConfig.validateColumnPathsAgainstBudget();
+
             table.setFlatJsonConfig(flatJsonConfig);
             LOG.info("create table {} set flat json config: {}", tableName, flatJsonConfig.toString());
         } catch (AnalysisException e) {

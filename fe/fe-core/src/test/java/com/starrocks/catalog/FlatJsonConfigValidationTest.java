@@ -357,4 +357,128 @@ public class FlatJsonConfigValidationTest {
         Assertions.assertEquals(List.of("k1", "k2"), result.get("j1"));
     }
 
+    // =====================================================================================
+    // BE propagation regression tests
+    //
+    // These tests guard against the upstream bug where ALTER TABLE SET flat_json.* never
+    // reached the BE-side FlatJsonConfig: TTabletMetaType.FLAT_JSON_CONFIG enum existed but
+    // updateFlatJsonConfigMeta dispatched no AgentTask. Verified via cluster experiments
+    // (cluster-contrib + 4.1.0 + pure upstream, all reproducing) that BE silently kept the
+    // CREATE-time config forever. The fix adds:
+    //   1) FlatJsonConfig.configVersion (incremented on every ALTER)
+    //   2) UpdateFlatJsonConfigTask + factory in TabletMetadataUpdateAgentTaskFactory
+    //   3) updateFlatJsonPartitionTabletMeta push in SchemaChangeHandler
+    //   4) handleSetTabletFlatJsonConfig reconciliation in ReportHandler
+    //   5) BE-side update_flat_json_config + tablet report including the version
+    // The tests below cover the FE-visible invariants (1) so any future regression that
+    // forgets to bump the version, or sends a payload without it, fails CI loudly.
+    // =====================================================================================
+
+    @Test
+    public void testFlatJsonConfig_versionStartsAtZero() {
+        // CREATE-time invariant: a freshly built FlatJsonConfig must report version 0 so the
+        // first ALTER's incVersion() lands at 1 (matches BinlogConfig semantics, which the
+        // BE-side update_flat_json_config gate compares against).
+        FlatJsonConfig fresh = new FlatJsonConfig();
+        Assertions.assertEquals(0L, fresh.getVersion());
+    }
+
+    @Test
+    public void testFlatJsonConfig_incVersionMonotonic() {
+        FlatJsonConfig config = new FlatJsonConfig();
+        config.incVersion();
+        Assertions.assertEquals(1L, config.getVersion());
+        config.incVersion();
+        Assertions.assertEquals(2L, config.getVersion());
+    }
+
+    @Test
+    public void testFlatJsonConfig_copyConstructorPreservesVersion() {
+        // SchemaChangeHandler.updateFlatJsonConfigMeta constructs newFlatJsonConfig as a copy
+        // of the existing one, then incVersion()s. If the copy dropped the version, every
+        // ALTER would reset to 1 and ReportHandler reconciliation would miss subsequent drift.
+        FlatJsonConfig original = new FlatJsonConfig();
+        original.incVersion();
+        original.incVersion();
+        original.incVersion();
+
+        FlatJsonConfig copy = new FlatJsonConfig(original);
+        Assertions.assertEquals(3L, copy.getVersion());
+    }
+
+    @Test
+    public void testFlatJsonConfig_toThriftIncludesVersion() {
+        // The push path serializes via toTFlatJsonConfig(); BE reads
+        // TFlatJsonConfig.version on the receiving side. If this field were not set the BE
+        // gate (update_flat_json_config) would see version=0 and silently accept any older
+        // push, defeating the whole reconciliation design.
+        FlatJsonConfig config = new FlatJsonConfig();
+        config.setVersion(42L);
+
+        com.starrocks.thrift.TFlatJsonConfig thrift = config.toTFlatJsonConfig();
+        Assertions.assertTrue(thrift.isSetVersion(),
+                "TFlatJsonConfig.version must be set so BE can gate stale pushes");
+        Assertions.assertEquals(42L, thrift.getVersion());
+    }
+
+    // =====================================================================================
+    // Budget validation tests
+    //
+    // Without validateColumnPathsAgainstBudget(), CREATE/ALTER would accept a forced path
+    // list larger than flat_json.column.max; the BE-side _finalize then silently truncates
+    // the excess to remain (raw JSON fallback). The operator never learns that their N-th
+    // forced path is being demoted. Validate-time rejection makes the conflict loud.
+    // =====================================================================================
+
+    @Test
+    public void testValidateColumnPathsAgainstBudget_belowOrEqualPasses() {
+        FlatJsonConfig config = new FlatJsonConfig(true, 0.3, 0.3, 4);
+        config.setColumnPaths("j", List.of("a", "b", "c", "d"));
+        // exact fit (4 paths, budget 4) is fine
+        config.validateColumnPathsAgainstBudget();
+    }
+
+    @Test
+    public void testValidateColumnPathsAgainstBudget_overBudgetThrows() {
+        FlatJsonConfig config = new FlatJsonConfig(true, 0.3, 0.3, 4);
+        config.setColumnPaths("j", List.of("a", "b", "c", "d", "e"));
+
+        com.starrocks.sql.analyzer.SemanticException ex = Assertions.assertThrows(
+                com.starrocks.sql.analyzer.SemanticException.class,
+                config::validateColumnPathsAgainstBudget);
+        Assertions.assertTrue(ex.getMessage().contains("flat_json.column_paths.j"),
+                "Error must identify the offending column. Got: " + ex.getMessage());
+        Assertions.assertTrue(ex.getMessage().contains("5"),
+                "Error must quote the actual path count. Got: " + ex.getMessage());
+        Assertions.assertTrue(ex.getMessage().contains("4"),
+                "Error must quote flat_json.column.max. Got: " + ex.getMessage());
+    }
+
+    @Test
+    public void testValidateColumnPathsAgainstBudget_zeroBudgetIsUnlimited() {
+        // _finalize treats column_max <= 0 as "no cap"; the validator must agree, otherwise
+        // setting flat_json.column.max=0 (the legacy "unlimited" sentinel) would falsely
+        // reject every column with at least one path.
+        FlatJsonConfig config = new FlatJsonConfig(true, 0.3, 0.3, 0);
+        config.setColumnPaths("j", List.of("a", "b", "c", "d", "e", "f", "g", "h", "i", "j"));
+        config.validateColumnPathsAgainstBudget();
+    }
+
+    @Test
+    public void testValidateColumnPathsAgainstBudget_emptyPathsPasses() {
+        FlatJsonConfig config = new FlatJsonConfig(true, 0.3, 0.3, 2);
+        config.validateColumnPathsAgainstBudget();
+    }
+
+    @Test
+    public void testValidateColumnPathsAgainstBudget_perColumnNotTotal() {
+        // The cap is per-JSON-column (mirrors BE's _max_column which is per-deriver call).
+        // Two columns each with 3 paths under a budget of 4 should pass even though the
+        // total (6) exceeds the cap.
+        FlatJsonConfig config = new FlatJsonConfig(true, 0.3, 0.3, 4);
+        config.setColumnPaths("j1", List.of("a", "b", "c"));
+        config.setColumnPaths("j2", List.of("x", "y", "z"));
+        config.validateColumnPathsAgainstBudget();
+    }
+
 }

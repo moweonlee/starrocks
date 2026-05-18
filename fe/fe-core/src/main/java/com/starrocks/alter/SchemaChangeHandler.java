@@ -2602,8 +2602,30 @@ public class SchemaChangeHandler extends AlterHandler {
             return true;
         }
 
+        // Reject ALTER attempts that would push any column's forced path list over
+        // flat_json.column.max. Mirrors the CREATE-time check in OlapTableFactory.
+        // We validate here (after merging incoming properties into newFlatJsonConfig but
+        // before incVersion/persist) so a bad ALTER cannot leave FE+BE state inconsistent.
+        newFlatJsonConfig.validateColumnPathsAgainstBudget();
+
+        // Collect partitions for the subsequent BE-side push. We snapshot them BEFORE
+        // bumping the version + persisting so the push targets the same generation of
+        // replicas that the FE just committed to.
+        List<Partition> partitions = Lists.newArrayList();
+        locker.lockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.READ);
+        try {
+            partitions.addAll(olapTable.getPartitions());
+        } finally {
+            locker.unLockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.READ);
+        }
+
         locker.lockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.WRITE);
         try {
+            // Bump the config version BEFORE persisting so the BE-side push and the
+            // ReportHandler reconciliation can detect drift. Mirrors BinlogConfig.incVersion()
+            // in updateBinlogConfigMeta.
+            newFlatJsonConfig.incVersion();
+
             // Erase stale per-column properties inside the write lock so the removal and the
             // WAL write are atomic. Keeping this outside the lock created a window where
             // SHOW CREATE TABLE could observe the old keys already removed but the new values
@@ -2621,7 +2643,104 @@ public class SchemaChangeHandler extends AlterHandler {
             locker.unLockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.WRITE);
         }
 
+        // Push the new config to every BE that owns a replica of this table. Mirrors the
+        // updateBinlogPartitionTabletMeta call at the end of updateBinlogConfigMeta. Without
+        // this, the new config lives only in FE metadata and BE write/compaction paths keep
+        // using the stale FlatJsonConfig persisted on BE-side tablet meta.
+        if (isModifiedSuccess) {
+            try {
+                for (Partition partition : partitions) {
+                    updateFlatJsonPartitionTabletMeta(db, olapTable.getName(), partition.getName(),
+                            olapTable.getFlatJsonConfig());
+                }
+            } catch (DdlException e) {
+                LOG.warn("Failed to push updated flat_json_config to BE for table {}: {}",
+                        olapTable.getName(), e.getMessage());
+                // FE meta was already committed; subsequent ReportHandler reconciliation will
+                // catch the version drift and retry. Do NOT mark isModifiedSuccess=false here
+                // for the same reason updateBinlogConfigMeta does not.
+            }
+        }
+
         return isModifiedSuccess;
+    }
+
+    /**
+     * Push the table-level FlatJsonConfig to every BE that hosts a replica of the given
+     * partition. Mirrors {@link #updateBinlogPartitionTabletMeta} both in collection logic
+     * and dispatch (AgentBatchTask + countDownLatch + await). The push is synchronous so a
+     * subsequent INSERT (in the same SQL session as the ALTER) immediately sees the new
+     * config; ReportHandler reconciliation only covers asynchronous drift recovery.
+     */
+    public void updateFlatJsonPartitionTabletMeta(Database db,
+                                                  String tableName,
+                                                  String partitionName,
+                                                  FlatJsonConfig flatJsonConfig) throws DdlException {
+        Map<Long, Set<Long>> beIdToTabletId = Maps.newHashMap();
+        OlapTable olapTable = (OlapTable) GlobalStateMgr.getCurrentState().getLocalMetastore()
+                .getTable(db.getFullName(), tableName);
+
+        Locker locker = new Locker();
+        locker.lockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.READ);
+        try {
+            Partition partition = olapTable.getPartition(partitionName);
+            if (partition == null) {
+                throw new DdlException(
+                        "Partition[" + partitionName + "] does not exist in table[" + olapTable.getName() + "]");
+            }
+
+            for (PhysicalPartition physicalPartition : partition.getSubPartitions()) {
+                MaterializedIndex baseIndex = physicalPartition.getLatestBaseIndex();
+                for (Tablet tablet : baseIndex.getTablets()) {
+                    for (Replica replica : ((LocalTablet) tablet).getImmutableReplicas()) {
+                        Set<Long> tabletSet = beIdToTabletId.computeIfAbsent(replica.getBackendId(),
+                                k -> Sets.newHashSet());
+                        tabletSet.add(tablet.getId());
+                    }
+                }
+            }
+        } finally {
+            locker.unLockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.READ);
+        }
+
+        int totalTaskNum = beIdToTabletId.keySet().size();
+        if (totalTaskNum == 0) {
+            return;
+        }
+        MarkedCountDownLatch<Long, Set<Long>> countDownLatch = new MarkedCountDownLatch<>(totalTaskNum);
+        AgentBatchTask batchTask = new AgentBatchTask();
+        for (Map.Entry<Long, Set<Long>> kv : beIdToTabletId.entrySet()) {
+            countDownLatch.addMark(kv.getKey(), kv.getValue());
+            TabletMetadataUpdateAgentTask task = TabletMetadataUpdateAgentTaskFactory
+                    .createFlatJsonConfigUpdateTask(kv.getKey(), kv.getValue(), flatJsonConfig);
+            task.setLatch(countDownLatch);
+            batchTask.addTask(task);
+        }
+        if (!FeConstants.runningUnitTest) {
+            AgentTaskQueue.addBatchTask(batchTask);
+            AgentTaskExecutor.submit(batchTask);
+            LOG.info("send update flat_json_config task for table {}, partitions {}, number: {}",
+                    tableName, partitionName, batchTask.getTaskNum());
+
+            long timeout = Config.tablet_create_timeout_second * 1000L * totalTaskNum;
+            timeout = Math.min(timeout, Config.max_create_table_timeout_second * 1000L);
+            try {
+                boolean ok = countDownLatch.await(timeout, TimeUnit.MILLISECONDS);
+                if (!ok || !countDownLatch.getStatus().ok()) {
+                    AgentTaskQueue.removeBatchTask(batchTask, TTaskType.UPDATE_TABLET_META_INFO);
+                    String errMsg = "Failed to update flat_json_config on BE for partition[" + partitionName + "]";
+                    if (!countDownLatch.getStatus().ok()) {
+                        errMsg += ". Error: " + countDownLatch.getStatus().getErrorMsg();
+                    }
+                    // Do not fail the ALTER for partial BE failures: FE state is the source of
+                    // truth and the periodic tablet-report reconciliation will catch up. Log
+                    // only — matches updateBinlogPartitionTabletMeta semantics.
+                    LOG.warn(errMsg);
+                }
+            } catch (InterruptedException e) {
+                LOG.warn("Interrupted while waiting for flat_json_config update tasks", e);
+            }
+        }
     }
 
     // return true means that the modification of FEMeta is successful,

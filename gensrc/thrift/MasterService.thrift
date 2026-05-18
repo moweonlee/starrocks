@@ -66,6 +66,10 @@ struct TTabletInfo {
     20: optional i64 max_rowset_creation_time
     21: optional i32 primary_index_cache_expire_sec
     22: optional i32 tablet_schema_version
+    // Version of the flat_json_config currently applied on the BE side for this tablet.
+    // Reported back to FE so the leader can detect drift (e.g. ALTER push lost / BE restart
+    // before applying) and re-push the latest config via TabletMetadataUpdateAgentTask.
+    23: optional i64 flat_json_config_version
 }
 
 struct TTabletVersionPair {
