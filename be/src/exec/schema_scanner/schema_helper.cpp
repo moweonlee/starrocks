@@ -142,6 +142,14 @@ Status SchemaHelper::get_tables_config(const SchemaScannerState& state, const TG
     });
 }
 
+Status SchemaHelper::get_flat_json_configs(const SchemaScannerState& state,
+                                           const TGetFlatJsonConfigsRequest& var_params,
+                                           TGetFlatJsonConfigsResponse* var_result) {
+    return _call_rpc(state, [&var_params, &var_result](FrontendServiceConnection& client) {
+        client->getFlatJsonConfigs(*var_result, var_params);
+    });
+}
+
 Status SchemaHelper::get_tasks(const SchemaScannerState& state, const TGetTasksParams& var_params,
                                TGetTaskInfoResult* var_result) {
     return _call_rpc(state, [&var_params, &var_result](FrontendServiceConnection& client) {

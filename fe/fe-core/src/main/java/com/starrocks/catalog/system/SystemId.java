@@ -118,6 +118,10 @@ public class SystemId {
 
     public static final long STATISTICS_V5_ID = 50L;
 
+    public static final long FLAT_JSON_CONFIGS_ID = 51L;
+
+    public static final long FLAT_JSON_PATHS_ID = 52L;
+
     public static final long SYS_DB_ID = 100L;
 
     public static final long ROLE_EDGES_ID = 101L;

@@ -1578,6 +1578,26 @@ struct TGetTablesConfigResponse {
     1: optional list<TTableConfigInfo> tables_config_infos
 }
 
+struct TGetFlatJsonConfigsRequest {
+    1: optional TAuthInfo auth_info
+    2: optional string table_name
+}
+
+struct TFlatJsonConfigInfo {
+    1: optional string table_catalog
+    2: optional string table_schema
+    3: optional string table_name
+    4: optional i64 table_id
+    5: optional bool flat_json_enable
+    6: optional double flat_json_null_factor
+    7: optional double flat_json_sparsity_factor
+    8: optional i32 flat_json_column_max
+}
+
+struct TGetFlatJsonConfigsResponse {
+    1: optional list<TFlatJsonConfigInfo> flat_json_configs_infos
+}
+
 struct TGetPartitionsMetaRequest {
     1: optional TAuthInfo auth_info
     // get partitions where table id >= start_table_id_offset
@@ -2406,6 +2426,8 @@ service FrontendService {
     TGetTablesInfoResponse getTablesInfo(1: TGetTablesInfoRequest request)
 
     TGetTablesConfigResponse getTablesConfig(1: TGetTablesConfigRequest request)
+
+    TGetFlatJsonConfigsResponse getFlatJsonConfigs(1: TGetFlatJsonConfigsRequest request)
 
     TGetUserPrivsResult getUserPrivs(1:TGetUserPrivsParams params)
     TGetDBPrivsResult getDBPrivs(1:TGetDBPrivsParams params)

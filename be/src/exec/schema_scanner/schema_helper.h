@@ -95,6 +95,9 @@ public:
     static Status get_tables_config(const SchemaScannerState& state, const TGetTablesConfigRequest& var_params,
                                     TGetTablesConfigResponse* var_result);
 
+    static Status get_flat_json_configs(const SchemaScannerState& state, const TGetFlatJsonConfigsRequest& var_params,
+                                        TGetFlatJsonConfigsResponse* var_result);
+
     static Status get_tablet_schedules(const SchemaScannerState& state, const TGetTabletScheduleRequest& request,
                                        TGetTabletScheduleResponse* response);
 

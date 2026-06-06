@@ -70,6 +70,8 @@ public class InfoSchemaDb extends Database {
         // tables that are only displayed in internal catalog
         if (isInternalCatalog(catalogName)) {
             super.registerTableUnlocked(TablesConfigSystemTable.create());
+            super.registerTableUnlocked(FlatJsonConfigsSystemTable.create());
+            super.registerTableUnlocked(FlatJsonPathsSystemTable.create());
             super.registerTableUnlocked(SessionVariablesSystemTable.create());
             super.registerTableUnlocked(VerboseSessionVariablesSystemTable.create());
             super.registerTableUnlocked(GlobalVariablesSystemTable.create());

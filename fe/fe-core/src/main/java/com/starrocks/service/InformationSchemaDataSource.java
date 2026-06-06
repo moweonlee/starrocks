@@ -27,6 +27,7 @@ import com.starrocks.catalog.Column;
 import com.starrocks.catalog.DataProperty;
 import com.starrocks.catalog.Database;
 import com.starrocks.catalog.DistributionInfo;
+import com.starrocks.catalog.FlatJsonConfig;
 import com.starrocks.catalog.InternalCatalog;
 import com.starrocks.catalog.JDBCTable;
 import com.starrocks.catalog.MaterializedIndex;
@@ -59,8 +60,11 @@ import com.starrocks.sql.analyzer.SemanticException;
 import com.starrocks.sql.ast.KeysType;
 import com.starrocks.thrift.TApplicableRolesInfo;
 import com.starrocks.thrift.TAuthInfo;
+import com.starrocks.thrift.TFlatJsonConfigInfo;
 import com.starrocks.thrift.TGetApplicableRolesRequest;
 import com.starrocks.thrift.TGetApplicableRolesResponse;
+import com.starrocks.thrift.TGetFlatJsonConfigsRequest;
+import com.starrocks.thrift.TGetFlatJsonConfigsResponse;
 import com.starrocks.thrift.TGetKeywordsRequest;
 import com.starrocks.thrift.TGetKeywordsResponse;
 import com.starrocks.thrift.TGetPartitionsMetaRequest;
@@ -311,6 +315,86 @@ public class InformationSchemaDataSource {
             }
         }
         resp.tables_config_infos = tList;
+        return resp;
+    }
+
+    public static TGetFlatJsonConfigsResponse generateFlatJsonConfigsResponse(TGetFlatJsonConfigsRequest request)
+            throws TException {
+        TGetFlatJsonConfigsResponse resp = new TGetFlatJsonConfigsResponse();
+        List<TFlatJsonConfigInfo> infos = new ArrayList<>();
+
+        AuthDbRequestResult result = getAuthDbRequestResult(request.getAuth_info());
+
+        PatternMatcher tableMatcher = null;
+        if (request.isSetTable_name()) {
+            try {
+                tableMatcher = PatternMatcher.createMysqlPattern(request.getTable_name(),
+                        CaseSensibility.TABLE.getCaseSensibility());
+            } catch (SemanticException e) {
+                throw new TException("Pattern is in bad format: " + request.getTable_name());
+            }
+        }
+
+        for (String dbName : result.authorizedDbs) {
+            Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(dbName);
+            if (db == null) {
+                continue;
+            }
+            List<Table> allTables = db.getTables();
+            for (Table table : allTables) {
+                if (tableMatcher != null && !tableMatcher.match(table.getName())) {
+                    continue;
+                }
+                if (!(table instanceof OlapTable)) {
+                    continue;
+                }
+
+                try {
+                    ConnectContext context = result.buildConnectContext();
+                    Authorizer.checkAnyActionOnTableLikeObject(context, dbName, table);
+                } catch (AccessDeniedException e) {
+                    LOG.info("failed to check db: {} table: {} authorization", dbName, table, e);
+                    continue;
+                }
+
+                Locker locker = new Locker();
+                locker.lockTableWithIntensiveDbLock(db.getId(), table.getId(), LockType.READ);
+                try {
+                    // db.getTables() was snapshotted without holding the DB lock, so
+                    // a concurrent DROP may have removed this table before we got
+                    // the table READ lock. Re-fetch to detect that race and skip.
+                    if (GlobalStateMgr.getCurrentState().getLocalMetastore()
+                            .getTable(db.getId(), table.getId()) == null) {
+                        continue;
+                    }
+                    OlapTable olapTable = (OlapTable) table;
+                    if (!olapTable.containsFlatJsonConfig()) {
+                        continue;
+                    }
+                    // Belt-and-braces: containsFlatJsonConfig() returned true, but
+                    // getFlatJsonConfig() can still race to null if tableProperty
+                    // is concurrently swapped wholesale. Skip rather than NPE.
+                    FlatJsonConfig config = olapTable.getFlatJsonConfig();
+                    if (config == null) {
+                        continue;
+                    }
+
+                    TFlatJsonConfigInfo info = new TFlatJsonConfigInfo();
+                    info.setTable_catalog(InternalCatalog.DEFAULT_INTERNAL_CATALOG_NAME);
+                    info.setTable_schema(dbName);
+                    info.setTable_name(olapTable.getName());
+                    info.setTable_id(olapTable.getId());
+                    info.setFlat_json_enable(config.getFlatJsonEnable());
+                    info.setFlat_json_null_factor(config.getFlatJsonNullFactor());
+                    info.setFlat_json_sparsity_factor(config.getFlatJsonSparsityFactor());
+                    info.setFlat_json_column_max(config.getFlatJsonColumnMax());
+                    infos.add(info);
+                } finally {
+                    locker.unLockTableWithIntensiveDbLock(db.getId(), table.getId(), LockType.READ);
+                }
+            }
+        }
+        resp.flat_json_configs_infos = infos;
         return resp;
     }
 

@@ -39,6 +39,8 @@
 #include "exec/schema_scanner/schema_fe_metrics_scanner.h"
 #include "exec/schema_scanner/schema_fe_tablet_schedules_scanner.h"
 #include "exec/schema_scanner/schema_fe_threads_scanner.h"
+#include "exec/schema_scanner/schema_flat_json_configs_scanner.h"
+#include "exec/schema_scanner/schema_flat_json_paths_scanner.h"
 #include "exec/schema_scanner/schema_keywords_scanner.h"
 #include "exec/schema_scanner/schema_load_tracking_logs_scanner.h"
 #include "exec/schema_scanner/schema_loads_scanner.h"
@@ -110,6 +112,10 @@ std::unique_ptr<SchemaScanner> SchemaScanner::create(TSchemaTableType::type type
         return std::make_unique<SchemaLoadTrackingLogsScanner>();
     case TSchemaTableType::SCH_TABLES_CONFIG:
         return std::make_unique<SchemaTablesConfigScanner>();
+    case TSchemaTableType::SCH_FLAT_JSON_CONFIGS:
+        return std::make_unique<SchemaFlatJsonConfigsScanner>();
+    case TSchemaTableType::SCH_FLAT_JSON_PATHS:
+        return std::make_unique<SchemaFlatJsonPathsScanner>();
     case TSchemaTableType::SCH_VERBOSE_SESSION_VARIABLES:
         return std::make_unique<SchemaVariablesScanner>(TVarType::VERBOSE);
     case TSchemaTableType::SCH_BE_TABLETS:

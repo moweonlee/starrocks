@@ -212,7 +212,11 @@ enum TSchemaTableType {
 
     SCH_FE_THREADS,
 
-    SCH_BE_TABLET_WRITE_LOG
+    SCH_BE_TABLET_WRITE_LOG,
+
+    SCH_FLAT_JSON_CONFIGS,
+
+    SCH_FLAT_JSON_PATHS
 }
 
 enum THdfsCompression {

@@ -253,6 +253,8 @@ import com.starrocks.thrift.TGetDictQueryParamRequest;
 import com.starrocks.thrift.TGetDictQueryParamResponse;
 import com.starrocks.thrift.TGetFeThreadsRequest;
 import com.starrocks.thrift.TGetFeThreadsResponse;
+import com.starrocks.thrift.TGetFlatJsonConfigsRequest;
+import com.starrocks.thrift.TGetFlatJsonConfigsResponse;
 import com.starrocks.thrift.TGetGrantsToRolesOrUserRequest;
 import com.starrocks.thrift.TGetGrantsToRolesOrUserResponse;
 import com.starrocks.thrift.TGetKeysRequest;
@@ -3055,6 +3057,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     @Override
     public TGetTablesConfigResponse getTablesConfig(TGetTablesConfigRequest request) throws TException {
         return InformationSchemaDataSource.generateTablesConfigResponse(request);
+    }
+
+    @Override
+    public TGetFlatJsonConfigsResponse getFlatJsonConfigs(TGetFlatJsonConfigsRequest request) throws TException {
+        return InformationSchemaDataSource.generateFlatJsonConfigsResponse(request);
     }
 
     @Override
