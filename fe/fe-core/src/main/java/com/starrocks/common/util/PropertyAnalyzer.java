@@ -180,6 +180,10 @@ public class PropertyAnalyzer {
 
     public static final String PROPERTIES_FLAT_JSON_VERSION = "flat_json.version";
 
+    // Per-JSON-column user-specified column paths:
+    //   flat_json.column_paths.<json_column_name> = "$.path1, $.path2"
+    public static final String PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX = "flat_json.column_paths.";
+
     public static final String PROPERTIES_STORAGE_TYPE_COLUMN = "column";
     public static final String PROPERTIES_STORAGE_TYPE_COLUMN_WITH_ROW = "column_with_row";
 
@@ -634,6 +638,74 @@ public class PropertyAnalyzer {
             flatJsonEnabled = Boolean.parseBoolean(properties.get(PROPERTIES_FLAT_JSON_ENABLE));
         }
         return flatJsonEnabled;
+    }
+
+    // Returns true if the properties map contains ANY flat_json.column_paths.<col> key.
+    public static boolean hasFlatJsonColumnPathsProperty(Map<String, String> properties) {
+        if (properties == null) {
+            return false;
+        }
+        for (String key : properties.keySet()) {
+            if (key.startsWith(PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Parses a comma-separated list of JSON paths. Strips the optional "$." prefix so the
+    // returned strings are in internal dot-separated form ("a.b.c"). Empty tokens are skipped.
+    // Rejects duplicate paths so that the user's intent is unambiguous and the budget
+    // accounting (flat_json.column.max) reflects a one-to-one mapping between list entries
+    // and sub-columns. BE deduplicates physically via its path-tree, so a duplicate entry
+    // is always operator error.
+    private static java.util.List<String> parseFlatJsonPathList(String raw, String propKey) {
+        if (raw == null) {
+            return java.util.Collections.emptyList();
+        }
+        raw = raw.trim();
+        if (raw.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+        java.util.List<String> result = new java.util.ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (String part : raw.split(",")) {
+            String path = part.trim();
+            if (path.startsWith("$.")) {
+                path = path.substring(2);
+            }
+            if (path.isEmpty()) {
+                continue;
+            }
+            if (!seen.add(path)) {
+                throw new SemanticException(
+                        "Duplicate path '" + path + "' in " + propKey
+                                + ". flat_json.column_paths must list each path at most once.");
+            }
+            result.add(path);
+        }
+        return java.util.Collections.unmodifiableList(result);
+    }
+
+    // Extracts per-column forced-path entries: "flat_json.column_paths.<col>" -> List<path>.
+    public static java.util.Map<String, java.util.List<String>> analyzeFlatJsonColumnPaths(
+            Map<String, String> properties) {
+        java.util.Map<String, java.util.List<String>> result = new java.util.HashMap<>();
+        if (properties == null) {
+            return result;
+        }
+        for (Map.Entry<String, String> entry : properties.entrySet()) {
+            String key = entry.getKey();
+            if (!key.startsWith(PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)) {
+                continue;
+            }
+            String col = key.substring(PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX.length());
+            if (col.isEmpty()) {
+                continue;
+            }
+            result.put(col, parseFlatJsonPathList(entry.getValue(), key));
+        }
+        return result;
     }
 
     public static boolean analyzeEnableLoadProfile(Map<String, String> properties) {

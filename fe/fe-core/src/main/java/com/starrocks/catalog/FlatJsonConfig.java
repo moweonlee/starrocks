@@ -20,8 +20,13 @@ import com.starrocks.common.io.Writable;
 import com.starrocks.common.util.PropertyAnalyzer;
 import com.starrocks.thrift.TFlatJsonConfig;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 public class FlatJsonConfig implements Writable {
     @SerializedName("flatJsonEnable")
@@ -39,12 +44,18 @@ public class FlatJsonConfig implements Writable {
     @SerializedName("configVersion")
     private long configVersion;
 
+    // Per-JSON-column user-specified column paths: <json_column_name> -> list of dot-separated
+    // paths (no leading "$."). Empty/absent entry means the column has no user-specified paths.
+    @SerializedName("flatJsonColumnPaths")
+    private Map<String, List<String>> flatJsonColumnPaths;
+
     public FlatJsonConfig(boolean enabled, double nullFactor, double sparsityFactor, int columnMax) {
         this.flatJsonEnable = enabled;
         this.flatJsonNullFactor = nullFactor;
         this.flatJsonSparsityFactor = sparsityFactor;
         this.flatJsonColumnMax = columnMax;
         this.configVersion = 0;
+        this.flatJsonColumnPaths = new LinkedHashMap<>();
     }
 
     public FlatJsonConfig(FlatJsonConfig config) {
@@ -53,6 +64,7 @@ public class FlatJsonConfig implements Writable {
         this.flatJsonSparsityFactor = config.getFlatJsonSparsityFactor();
         this.flatJsonColumnMax = config.getFlatJsonColumnMax();
         this.configVersion = config.getVersion();
+        this.flatJsonColumnPaths = deepCopyPaths(config.getFlatJsonColumnPaths());
     }
 
     public FlatJsonConfig() {
@@ -81,6 +93,11 @@ public class FlatJsonConfig implements Writable {
             flatJsonColumnMax = Integer.parseInt(properties.get(
                     PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX));
         }
+        // Replace (not merge) per-column paths from the properties map. On follower-FE EditLog
+        // replay the leader emits the full state in toProperties(), so this must overwrite any
+        // stale in-memory entries.
+        Map<String, List<String>> perCol = PropertyAnalyzer.analyzeFlatJsonColumnPaths(properties);
+        flatJsonColumnPaths = new LinkedHashMap<>(perCol);
     }
 
     public boolean getFlatJsonEnable() {
@@ -115,6 +132,34 @@ public class FlatJsonConfig implements Writable {
         this.flatJsonColumnMax = flatJsonColumnMax;
     }
 
+    public Map<String, List<String>> getFlatJsonColumnPaths() {
+        return flatJsonColumnPaths == null ? Collections.emptyMap() : flatJsonColumnPaths;
+    }
+
+    public void setFlatJsonColumnPaths(Map<String, List<String>> paths) {
+        this.flatJsonColumnPaths = paths == null ? new LinkedHashMap<>() : new LinkedHashMap<>(paths);
+    }
+
+    // Returns the path list for a single JSON column (empty list if absent).
+    public List<String> getColumnPaths(String columnName) {
+        Map<String, List<String>> map = getFlatJsonColumnPaths();
+        List<String> list = map.get(columnName);
+        return list == null ? Collections.emptyList() : list;
+    }
+
+    // Replaces the path list for a single JSON column. Passing an empty/null list REMOVES
+    // the entry so the column falls back to pure sparsity-based flattening.
+    public void setColumnPaths(String columnName, List<String> paths) {
+        if (flatJsonColumnPaths == null) {
+            flatJsonColumnPaths = new LinkedHashMap<>();
+        }
+        if (paths == null || paths.isEmpty()) {
+            flatJsonColumnPaths.remove(columnName);
+        } else {
+            flatJsonColumnPaths.put(columnName, new ArrayList<>(paths));
+        }
+    }
+
     public long getVersion() {
         return configVersion;
     }
@@ -138,6 +183,12 @@ public class FlatJsonConfig implements Writable {
             properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR,
                     String.valueOf(flatJsonSparsityFactor));
             properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX, String.valueOf(flatJsonColumnMax));
+            if (flatJsonColumnPaths != null) {
+                for (Map.Entry<String, List<String>> entry : flatJsonColumnPaths.entrySet()) {
+                    String key = PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX + entry.getKey();
+                    properties.put(key, String.join(",", entry.getValue()));
+                }
+            }
         }
         return properties;
     }
@@ -149,10 +200,22 @@ public class FlatJsonConfig implements Writable {
         tFlatJsonConfig.setFlat_json_null_factor(flatJsonNullFactor);
         tFlatJsonConfig.setFlat_json_sparsity_factor(flatJsonSparsityFactor);
         tFlatJsonConfig.setFlat_json_column_max(flatJsonColumnMax);
+        Map<String, List<String>> paths = getFlatJsonColumnPaths();
+        if (!paths.isEmpty()) {
+            tFlatJsonConfig.setFlat_json_column_paths(new TreeMap<>(paths));
+        }
         return tFlatJsonConfig;
     }
 
-
+    private static Map<String, List<String>> deepCopyPaths(Map<String, List<String>> src) {
+        Map<String, List<String>> dst = new LinkedHashMap<>();
+        if (src != null) {
+            for (Map.Entry<String, List<String>> e : src.entrySet()) {
+                dst.put(e.getKey(), new ArrayList<>(e.getValue()));
+            }
+        }
+        return dst;
+    }
 
 
     @Override
@@ -160,7 +223,9 @@ public class FlatJsonConfig implements Writable {
         return String.format("{ flat_json_enable : %b,\n " +
                 "flat_json_null_factor : %f,\n " +
                 "flat_json_sparsity_factor : %f,\n" +
-                "flat_json_column_max : %d }", flatJsonEnable, flatJsonNullFactor, flatJsonSparsityFactor,
-                flatJsonColumnMax);
+                "flat_json_column_max : %d,\n" +
+                "flat_json_column_paths : %s }",
+                flatJsonEnable, flatJsonNullFactor, flatJsonSparsityFactor, flatJsonColumnMax,
+                getFlatJsonColumnPaths());
     }
 }

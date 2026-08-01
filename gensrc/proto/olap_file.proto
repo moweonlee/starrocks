@@ -280,12 +280,21 @@ message BinlogConfigPB {
     optional int64 binlog_max_size = 4;
 }
 
+// Per-JSON-column force-flatten paths. column_name is the JSON column's
+// identifier in the table schema; paths are dot-separated (no leading "$.").
+message FlatJsonColumnPathsEntryPB {
+    optional string column_name = 1;
+    repeated string paths = 2;
+}
+
 message FlatJsonConfigPB {
     optional bool flat_json_enable = 1;
     optional double flat_json_null_factor = 2;
     optional double flat_json_sparsity_factor = 3;
     optional int64 flat_json_max_column_max = 4;
     optional int64 version = 5;
+    // Per-JSON-column paths that must always be flattened, regardless of sparsity.
+    repeated FlatJsonColumnPathsEntryPB flat_json_column_paths = 6;
 }
 
 message TabletMetaPB {

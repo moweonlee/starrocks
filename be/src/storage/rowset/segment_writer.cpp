@@ -258,17 +258,22 @@ Status SegmentWriter::init(const std::vector<uint32_t>& column_indexes, bool has
                 _global_dict_columns_valid_info[iter->first] = true;
             }
         }
-        if (column.type() == LogicalType::TYPE_JSON && _opts.global_dicts != nullptr) {
+        if (column.type() == LogicalType::TYPE_JSON) {
+            // field_name must be set for ALL JSON columns (load AND compaction) so that
+            // JsonPathDeriver::init_flat_json_config can look up per-column user-specified paths
+            // (flat_json.column_paths.<col>).
             opts.field_name = column.name();
-            std::string_view col_name = column.name();
-            for (auto& [k, dict_v] : *_opts.global_dicts) {
-                // k can be a.b.c, we must check the first token matches column.name()
-                size_t dot_pos = k.find('.');
-                std::string first_token = (dot_pos == std::string::npos) ? k : k.substr(0, dot_pos);
-                if (first_token == col_name) {
-                    opts.flat_json_dicts.emplace(k, dict_v.dict);
-                    _global_dict_columns_valid_info[k] = true;
-                    VLOG(2) << "set global dict for json column: " << k;
+            if (_opts.global_dicts != nullptr) {
+                std::string_view col_name = column.name();
+                for (auto& [k, dict_v] : *_opts.global_dicts) {
+                    // k can be a.b.c, we must check the first token matches column.name()
+                    size_t dot_pos = k.find('.');
+                    std::string first_token = (dot_pos == std::string::npos) ? k : k.substr(0, dot_pos);
+                    if (first_token == col_name) {
+                        opts.flat_json_dicts.emplace(k, dict_v.dict);
+                        _global_dict_columns_valid_info[k] = true;
+                        VLOG(2) << "set global dict for json column: " << k;
+                    }
                 }
             }
         }

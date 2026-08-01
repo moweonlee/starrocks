@@ -260,7 +260,7 @@ public class OlapTableFactory implements AbstractTableFactory {
                 String storageVolumeId = svm.getStorageVolumeIdOfTable(tableId);
                 metastore.setLakeStorageInfo(db, table, storageVolumeId, properties);
 
-                processFlatJsonConfig(properties, table, tableName);
+                processFlatJsonConfig(properties, table, baseSchema, tableName);
             } else {
                 table = new OlapTable(tableId, tableName, baseSchema, keysType, partitionInfo, distributionInfo, indexes);
             }
@@ -453,7 +453,7 @@ public class OlapTableFactory implements AbstractTableFactory {
                 }
             }
 
-            processFlatJsonConfig(properties, table, tableName);
+            processFlatJsonConfig(properties, table, baseSchema, tableName);
 
             try {
                 Optional<Long> bucketSize = PropertyAnalyzer.analyzeLongProp(properties,
@@ -919,7 +919,8 @@ public class OlapTableFactory implements AbstractTableFactory {
         olapTable.setForeignKeyConstraints(foreignKeyConstraints);
     }
 
-    private void processFlatJsonConfig(Map<String, String> properties, OlapTable table, String tableName)
+    private void processFlatJsonConfig(Map<String, String> properties, OlapTable table,
+                                       List<Column> baseSchema, String tableName)
             throws DdlException {
         if (properties == null || !hasFlatJsonProperties(properties)) {
             return;
@@ -932,7 +933,8 @@ public class OlapTableFactory implements AbstractTableFactory {
             // Check if other flat JSON properties are set when flat_json.enable is false
             if (!enableFlatJson && (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                     properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
-                    properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX))) {
+                    properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX) ||
+                    PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties))) {
                 throw new DdlException("flat JSON configuration must be set after enabling flat JSON.");
             }
 
@@ -942,9 +944,41 @@ public class OlapTableFactory implements AbstractTableFactory {
                     PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR, Config.flat_json_sparsity_factory);
             int flatJsonColumnMax = PropertyAnalyzer.analyzeIntProp(properties,
                     PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX, Config.flat_json_column_max);
+            // Per-column force-flatten paths.
+            java.util.Map<String, java.util.List<String>> perCol =
+                    PropertyAnalyzer.analyzeFlatJsonColumnPaths(properties);
+
+            // Validate that every column named in perCol is a JSON-typed column in the schema.
+            // NOTE: use the `baseSchema` parameter directly. table.getBaseSchema() goes through
+            // baseIndexMetaId/indexIdToMeta which are not yet populated at CREATE TABLE time, so it
+            // would return an empty list and every per-column key would falsely be reported as
+            // "unknown or non-JSON".
+            if (!perCol.isEmpty()) {
+                java.util.Set<String> jsonColumnNames = new java.util.HashSet<>();
+                for (Column col : baseSchema) {
+                    if (col.getType() != null && col.getType().isJsonType()) {
+                        jsonColumnNames.add(col.getName());
+                    }
+                }
+                for (String colName : perCol.keySet()) {
+                    if (!jsonColumnNames.contains(colName)) {
+                        throw new DdlException(
+                                "flat_json.column_paths references unknown or non-JSON column: '" + colName + "'");
+                    }
+                }
+            }
+
+            // Drop the consumed per-column keys so the trailing `properties.isEmpty()` check does not
+            // reject them as "Unknown properties". Re-emission for SHOW CREATE TABLE goes through
+            // FlatJsonConfig.toProperties() instead.
+            properties.keySet().removeIf(k ->
+                    k.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX));
 
             FlatJsonConfig flatJsonConfig = new FlatJsonConfig(enableFlatJson, flatJsonNullFactor,
                     flatJsonSparsityFactory, flatJsonColumnMax);
+            if (!perCol.isEmpty()) {
+                flatJsonConfig.setFlatJsonColumnPaths(perCol);
+            }
 
             table.setFlatJsonConfig(flatJsonConfig);
             LOG.info("create table {} set flat json config: {}", tableName, flatJsonConfig.toString());
@@ -957,6 +991,7 @@ public class OlapTableFactory implements AbstractTableFactory {
         return properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_ENABLE) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
-                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX);
+                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX) ||
+                PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties);
     }
 }

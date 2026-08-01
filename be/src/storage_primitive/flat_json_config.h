@@ -17,12 +17,18 @@
 #include <gen_cpp/olap_file.pb.h>
 
 #include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "gen_cpp/AgentService_types.h"
 
 namespace starrocks {
 class FlatJsonConfig {
 public:
+    // Ordered vector preserves the user-specified path order so truncation is left-to-right.
+    using ColumnPathsMap = std::unordered_map<std::string, std::vector<std::string>>;
+
     // Constructor
     FlatJsonConfig();
 
@@ -49,12 +55,35 @@ public:
     int64_t get_flat_json_config_version() const { return _flat_json_config_version; }
     void set_flat_json_config_version(int64_t version) { _flat_json_config_version = version; }
 
+    // Per-JSON-column force-flatten paths (dot-separated, no leading "$.").
+    const ColumnPathsMap& get_column_paths_map() const { return _flat_json_column_paths; }
+
+    // Returns the ordered path list for the given JSON column, or nullptr if absent.
+    const std::vector<std::string>* get_column_paths_for(const std::string& column_name) const {
+        auto it = _flat_json_column_paths.find(column_name);
+        return it == _flat_json_column_paths.end() ? nullptr : &it->second;
+    }
+
+    void set_column_paths_map(ColumnPathsMap paths) { _flat_json_column_paths = std::move(paths); }
+
+    void set_column_paths(const std::string& column_name, const std::vector<std::string>& paths) {
+        _flat_json_column_paths[column_name] = paths;
+    }
+
     void to_pb(FlatJsonConfigPB* flat_json_config_pb) {
         flat_json_config_pb->set_flat_json_enable(_flat_json_enable);
         flat_json_config_pb->set_flat_json_null_factor(_flat_json_null_factor);
         flat_json_config_pb->set_flat_json_sparsity_factor(_flat_json_sparsity_factor);
         flat_json_config_pb->set_flat_json_max_column_max(_flat_json_max_column_max);
         flat_json_config_pb->set_version(_flat_json_config_version);
+        flat_json_config_pb->clear_flat_json_column_paths();
+        for (const auto& [col, paths] : _flat_json_column_paths) {
+            auto* entry = flat_json_config_pb->add_flat_json_column_paths();
+            entry->set_column_name(col);
+            for (const auto& p : paths) {
+                entry->add_paths(p);
+            }
+        }
     }
 
     // Update function using another FlatJsonConfig
@@ -62,18 +91,30 @@ public:
         update(config.is_flat_json_enabled(), config.get_flat_json_null_factor(),
                config.get_flat_json_sparsity_factor(), config.get_flat_json_max_column_max());
         _flat_json_config_version = config.get_flat_json_config_version();
+        _flat_json_column_paths = config.get_column_paths_map();
     }
 
     void update(const TFlatJsonConfig& config) {
         update(config.flat_json_enable, config.flat_json_null_factor, config.flat_json_sparsity_factor,
                config.flat_json_column_max);
         _flat_json_config_version = config.__isset.version ? config.version : 0;
+        _flat_json_column_paths.clear();
+        if (config.__isset.flat_json_column_paths) {
+            for (const auto& [col, paths] : config.flat_json_column_paths) {
+                _flat_json_column_paths.emplace(col, std::vector<std::string>(paths.begin(), paths.end()));
+            }
+        }
     }
 
     void update(const FlatJsonConfigPB& flat_json_config_pb) {
         update(flat_json_config_pb.flat_json_enable(), flat_json_config_pb.flat_json_null_factor(),
                flat_json_config_pb.flat_json_sparsity_factor(), flat_json_config_pb.flat_json_max_column_max());
         _flat_json_config_version = flat_json_config_pb.has_version() ? flat_json_config_pb.version() : 0;
+        _flat_json_column_paths.clear();
+        for (const auto& entry : flat_json_config_pb.flat_json_column_paths()) {
+            std::vector<std::string> v(entry.paths().begin(), entry.paths().end());
+            _flat_json_column_paths.emplace(entry.column_name(), std::move(v));
+        }
     }
 
     // Copy Assignment
@@ -84,6 +125,7 @@ public:
             _flat_json_sparsity_factor = other._flat_json_sparsity_factor;
             _flat_json_max_column_max = other._flat_json_max_column_max;
             _flat_json_config_version = other._flat_json_config_version;
+            _flat_json_column_paths = other._flat_json_column_paths;
         }
         return *this;
     }
@@ -103,7 +145,22 @@ public:
         oss << "flat_json_null_factor=" << _flat_json_null_factor << ", ";
         oss << "flat_json_sparsity_factor=" << _flat_json_sparsity_factor << ", ";
         oss << "flat_json_max_column_max=" << _flat_json_max_column_max << ", ";
-        oss << "version=" << _flat_json_config_version;
+        oss << "version=" << _flat_json_config_version << ", ";
+        oss << "flat_json_column_paths={";
+        bool first_col = true;
+        for (const auto& [col, paths] : _flat_json_column_paths) {
+            if (!first_col) oss << ",";
+            oss << col << ":[";
+            bool first_p = true;
+            for (const auto& p : paths) {
+                if (!first_p) oss << ",";
+                oss << p;
+                first_p = false;
+            }
+            oss << "]";
+            first_col = false;
+        }
+        oss << "}";
         oss << "}";
         return oss.str();
     }
@@ -114,5 +171,7 @@ private:
     double _flat_json_sparsity_factor = 0;
     int _flat_json_max_column_max = 0;
     int64_t _flat_json_config_version = 0;
+    // Per-JSON-column force-flatten paths: column_name -> ordered dot-separated paths (no "$.").
+    ColumnPathsMap _flat_json_column_paths;
 };
 } // namespace starrocks

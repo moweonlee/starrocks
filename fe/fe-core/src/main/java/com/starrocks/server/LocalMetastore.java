@@ -4584,6 +4584,9 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
                 flatJsonConfig.toProperties()
         );
         GlobalStateMgr.getCurrentState().getEditLog().logModifyFlatJsonConfig(info, wal -> {
+            // Keep the property map in sync so SHOW CREATE TABLE and image persistence reflect
+            // the new config (including per-column flat_json.column_paths).
+            table.getTableProperty().modifyTableProperties(flatJsonConfig.toProperties());
             table.setFlatJsonConfig(flatJsonConfig);
         });
     }
@@ -4849,6 +4852,13 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
                 olapTable.setHasDelete();
             } else {
                 TableProperty tableProperty = olapTable.getTableProperty();
+                // Full-replace semantics for per-column flat_json.column_paths: modifyTableProperties
+                // does putAll (merge), so keys the leader dropped would linger on the follower. Clear
+                // all column_paths keys before the merge; toProperties() re-emits only survivors.
+                if (opCode == OperationType.OP_MODIFY_FLAT_JSON_CONFIG) {
+                    tableProperty.getProperties().keySet()
+                            .removeIf(k -> k.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX));
+                }
                 tableProperty.modifyTableProperties(properties);
                 tableProperty.buildProperty(opCode);
                 if (opCode == OperationType.OP_ALTER_TABLE_PROPERTIES &&

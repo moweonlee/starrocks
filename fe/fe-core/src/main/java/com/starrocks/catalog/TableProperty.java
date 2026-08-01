@@ -573,7 +573,8 @@ public class TableProperty implements Writable, GsonPostProcessable {
         if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_ENABLE) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
-                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX)) {
+                properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX) ||
+                PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties)) {
             boolean enableFlatJson = PropertyAnalyzer.analyzeFlatJsonEnabled(properties);
             // Read with get(), not analyzerDoubleProp/analyzeIntProp: those remove() the keys, and this
             // runs on every image load (gsonPostProcess), so the factors would be lost on the next
@@ -602,6 +603,12 @@ public class TableProperty implements Writable, GsonPostProcessable {
                 if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_VERSION)) {
                     flatJsonConfig.setVersion(Long.parseLong(properties.get(
                             PropertyAnalyzer.PROPERTIES_FLAT_JSON_VERSION)));
+                }
+                // Per-column force paths (full-replace keys flat_json.column_paths.<col>).
+                // In gsonPostProcess we stay tolerant: validation is done at ALTER time.
+                Map<String, List<String>> perColPaths = PropertyAnalyzer.analyzeFlatJsonColumnPaths(properties);
+                if (!perColPaths.isEmpty()) {
+                    flatJsonConfig.setFlatJsonColumnPaths(perColPaths);
                 }
             } catch (NumberFormatException e) {
                 LOG.warn("Invalid flat_json property value, using defaults: {}", e.getMessage());

@@ -54,6 +54,11 @@ public:
     int index = -1; // flat paths array index, only use for leaf, to find column
     LogicalType type = LogicalType::TYPE_JSON;
     bool remain = false;
+    bool force = false; // true: must flatten regardless of sparsity (column_paths)
+    // User-specified order index of the forced path (0-based). -1 = not forced (or order unknown).
+    // Used by _finalize to truncate forced_leaves left-to-right by user order, NOT by the
+    // hash-iteration order of `children`.
+    int force_order = -1;
     OP op = OP_INCLUDE; // merge flat json use, to mark the path is need
     FlatJsonHashMap<std::string_view, std::unique_ptr<JsonFlatPath>> children;
 

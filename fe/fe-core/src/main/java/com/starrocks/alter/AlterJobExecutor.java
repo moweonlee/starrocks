@@ -602,7 +602,8 @@ public class AlterJobExecutor implements AstVisitorExtendInterface<Void, Connect
             } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_ENABLE) ||
                     properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                     properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
-                    properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX)) {
+                    properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX) ||
+                    PropertyAnalyzer.hasFlatJsonColumnPathsProperty(properties)) {
                 if (table.isCloudNativeTable()) {
                     Locker locker = new Locker();
                     locker.lockTableWithIntensiveDbLock(db.getId(), table.getId(), LockType.WRITE);

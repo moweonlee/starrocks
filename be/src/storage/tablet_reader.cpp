@@ -190,7 +190,7 @@ Status TabletReader::_init_compaction_column_paths(const TabletReaderParams& rea
             // must all be flat json type
             JsonPathDeriver deriver;
             auto flat_json_config = _tablet->flat_json_config();
-            deriver.init_flat_json_config(flat_json_config.get());
+            deriver.init_flat_json_config(flat_json_config.get(), col_name);
             deriver.derived(readers);
             auto paths = deriver.flat_paths();
             auto types = deriver.flat_types();

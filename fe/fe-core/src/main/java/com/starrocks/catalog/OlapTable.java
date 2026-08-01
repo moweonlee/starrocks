@@ -147,6 +147,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -3265,7 +3266,7 @@ public class OlapTable extends Table {
         }
 
         // flat json
-        appendFlatJsonProperties(properties, tableProperties);
+        appendFlatJsonProperties(properties, tableProperties, this);
 
         return properties;
     }
@@ -3273,7 +3274,7 @@ public class OlapTable extends Table {
     // Render flat_json.* for SHOW CREATE TABLE; shared with LakeTable.getUniqueProperties()
     // so both modes stay in sync.
     protected static void appendFlatJsonProperties(Map<String, String> properties,
-                                                   Map<String, String> tableProperties) {
+                                                   Map<String, String> tableProperties, OlapTable table) {
         String flatJsonEnable = tableProperties.get(PropertyAnalyzer.PROPERTIES_FLAT_JSON_ENABLE);
         if (Strings.isNullOrEmpty(flatJsonEnable)) {
             return;
@@ -3296,6 +3297,29 @@ public class OlapTable extends Table {
             String flatJsonColumnMax = tableProperties.get(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX);
             if (!Strings.isNullOrEmpty(flatJsonColumnMax)) {
                 properties.put(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX, flatJsonColumnMax);
+            }
+
+            // flat json per-column force paths: forward any key under the prefix, but only for JSON
+            // columns that still exist in the schema. If the underlying JSON column was dropped via
+            // ALTER TABLE DROP COLUMN, the property entry may linger in metadata; we filter it out at
+            // emit time so SHOW CREATE TABLE never shows orphan references (same pattern as
+            // bloom_filter_columns, see getBfColumnNames()).
+            Set<String> existingJsonColumnNames = new HashSet<>();
+            for (Column col : table.getBaseSchema()) {
+                if (col.getType() != null && col.getType().isJsonType()) {
+                    existingJsonColumnNames.add(col.getName());
+                }
+            }
+            for (Map.Entry<String, String> flatJsonEntry : tableProperties.entrySet()) {
+                String key = flatJsonEntry.getKey();
+                if (key.startsWith(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX)
+                        && !Strings.isNullOrEmpty(flatJsonEntry.getValue())) {
+                    String columnName = key.substring(
+                            PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_PATHS_PREFIX.length());
+                    if (existingJsonColumnNames.contains(columnName)) {
+                        properties.put(key, flatJsonEntry.getValue());
+                    }
+                }
             }
         }
     }

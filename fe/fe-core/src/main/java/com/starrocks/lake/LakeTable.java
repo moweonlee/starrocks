@@ -162,7 +162,7 @@ public class LakeTable extends OlapTable {
 
         // flat_json: render it like OlapTable.getUniqueProperties() so SHOW CREATE TABLE reflects
         // the table-level flat_json config for cloud-native tables too.
-        appendFlatJsonProperties(properties, tableProperty.getProperties());
+        appendFlatJsonProperties(properties, tableProperty.getProperties(), this);
 
         return properties;
     }
